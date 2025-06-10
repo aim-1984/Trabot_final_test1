@@ -1,0 +1,12 @@
+aiohttp
+asyncio
+psycopg2-binary
+numpy
+pandas
+scipy
+matplotlib
+mplfinance
+PyQt5
+tk
+mplcursors
+python-dotenv
