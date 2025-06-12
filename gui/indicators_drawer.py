@@ -1,4 +1,3 @@
-# gui/indicators_drawer.py
 import pandas as pd
 import logging
 from database.database import DatabaseManager
@@ -155,4 +154,3 @@ class IndicatorDrawer:
         k = 100 * (df["Close"] - low_min) / (high_max - low_min)
         d = k.rolling(window=d_period).mean()
         return k, d
-

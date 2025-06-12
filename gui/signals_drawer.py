@@ -1,4 +1,3 @@
-# gui/signals_drawer.py
 import logging
 import pandas as pd
 from database.database import DatabaseManager
@@ -37,4 +36,3 @@ class SignalDrawer:
         df = df[df.index.isin(index_range)]
 
         return df
-

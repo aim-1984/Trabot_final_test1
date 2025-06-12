@@ -1,5 +1,3 @@
-# gui/levels_drawer.py
-
 import logging
 from database.database import DatabaseManager
 
@@ -43,4 +41,3 @@ class LevelDrawer:
                 )
             except:
                 continue
-

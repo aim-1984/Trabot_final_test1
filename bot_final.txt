@@ -18,7 +18,6 @@ if __name__ == "__main__":
 
 
 
-
 # reverse.py
 
 import os
@@ -71,52 +70,81 @@ if __name__ == "__main__":
 
 # run_full.py
 
-# run_full.py
-import logging
 import asyncio
-from services.worker import SignalWorker
-from services.identifier import PairIdentifier
-from services.collector import DataCollector
-from services.level_engine import LevelAnalyzer
-from services.indicator_engine import IndicatorEngine
-from services.trend_engine import TrendAnalyzer
-from services.signal_engine import SignalEngine
-from services.alert_engine import AlertSystem
-from services.deep_an import MarketCapTracker
-from database.database import DatabaseManager
+import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+import os
+from services.worker           import SignalWorker
+from services.identifier        import PairIdentifier
+from services.collector         import DataCollector
+from services.level_engine      import LevelAnalyzer
+from services.indicator_engine  import IndicatorEngine
+from services.trend_engine      import TrendAnalyzer
+from services.signal_engine     import SignalEngine
+from services.deep_an           import MarketCapTracker
+from database.database          import DatabaseManager
+
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
-async def main():
-    logger.info("🚀 Полный запуск: обновление + оценка сигналов")
-
+# ──────────────────────────────────────────────────────────────
+def wait_for_candles(target=50, timeout=10):
+    """Блокирует поток до появления достаточного числа свечей."""
     db = DatabaseManager()
-    db.clear_old_candles()
+    for _ in range(timeout):
+        if any(len(c) >= target for c in db.get_all_candles().values()):
+            logger.info("✅ Свечи успешно загружены")
+            return True
+        logger.info("⏳ Ожидание загрузки свечей...")
+        time.sleep(1)
+    logger.warning("❌ Свечи не появились за отведённое время")
+    return False
 
-    # Шаг 1: параллельный сбор
+# ──────────────────────────────────────────────────────────────
+async def update_market_data():
+    # ① сперва заполняем pairs_cache
+    await PairIdentifier().update_pairs_cache()
+
+    # ② затем уже параллельно всё остальное
     await asyncio.gather(
-        PairIdentifier().update_pairs_cache(),
-        DataCollector().update_all_timeframes(),
-        MarketCapTracker().fetch_total_market_cap()
+        # DerivativesEngine().update_metrics_for_all(),   # требует pairs_cache
+        # SentimentEngine().update_for_all(),             #   —//—
+        DataCollector().update_all_timeframes(),        #   —//—
+        MarketCapTracker().fetch_total_market_cap(),
     )
 
-    def sync_analysis():
-        LevelAnalyzer().analyze_levels()
-        IndicatorEngine().compute_indicators()
-        TrendAnalyzer().analyze_trends()
-        SignalEngine().generate_signals()
-        AlertSystem().check_alerts()
+def analyze():
+    LevelAnalyzer().analyze_levels()
+    IndicatorEngine().compute_indicators()
+    TrendAnalyzer().analyze_trends()
 
-    def run_worker():
-        worker = SignalWorker()
-        return worker.process_all_pairs()
+def run_worker():
+    return SignalWorker().process_all_pairs()
 
+# ──────────────────────────────────────────────────────────────
+async def main():
+    logger.info("🚀 Полный запуск: обновление + оценка сигналов")
+    DatabaseManager().clear_old_candles()
+
+    # Шаг 1. сетевые обновления
+    await update_market_data()
+
+    # Шаг 2. ждём появления свечей
     loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, wait_for_candles)
+
+    # Шаг 3. аналитика (CPU)
     with ThreadPoolExecutor() as pool:
-        await loop.run_in_executor(pool, sync_analysis)
+        await loop.run_in_executor(pool, analyze)
+
+        # Шаг 4. генерация «сырых» сигналов (AlertSystem внутри)
+        SignalEngine().generate_signals()
+
+        # Шаг 5. «глубокая» оценка всех сигналов
         signals = await loop.run_in_executor(pool, run_worker)
 
     if signals:
@@ -126,66 +154,73 @@ async def main():
 
 
 
+# ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    DatabaseManager.init_schema_once()
     asyncio.run(main())
 
 
-
-
-
-# run_tasks.py
 
 # run_tasks.py
 
 import asyncio
 import logging
-from services.identifier import PairIdentifier
-from services.collector import DataCollector
-from services.level_engine import LevelAnalyzer
-from services.indicator_engine import IndicatorEngine
-from services.trend_engine import TrendAnalyzer
-from services.alert_engine import AlertSystem
-from services.deep_an import MarketCapTracker
-from database.database import DatabaseManager
 from concurrent.futures import ThreadPoolExecutor
+
+from services.identifier      import PairIdentifier
+from services.collector       import DataCollector
+from services.level_engine    import LevelAnalyzer
+from services.indicator_engine import IndicatorEngine
+from services.trend_engine    import TrendAnalyzer
+from services.alert_engine    import AlertSystem
+from services.deep_an         import MarketCapTracker
+from database.database        import DatabaseManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-async def main():
-    logger.info("🚀 Обновление данных рынка (без сигналов)")
-    db = DatabaseManager()
-    db.clear_old_candles()
+# ──────────────────────────────────────────────────────────────
+async def update_market_data():
+    # ① сперва заполняем pairs_cache
+    await PairIdentifier().update_pairs_cache()
 
+    # ② затем уже параллельно всё остальное
     await asyncio.gather(
-        PairIdentifier().update_pairs_cache(),
-        DataCollector().update_all_timeframes(),
-        MarketCapTracker().fetch_total_market_cap()
+        # DerivativesEngine().update_metrics_for_all(),   # требует pairs_cache
+        # SentimentEngine().update_for_all(),             #   —//—
+        DataCollector().update_all_timeframes(),        #   —//—
+        MarketCapTracker().fetch_total_market_cap(),
     )
 
-    def sync_tasks():
-        LevelAnalyzer().analyze_levels()
-        IndicatorEngine().compute_indicators()
-        TrendAnalyzer().analyze_trends()
-        AlertSystem().check_alerts()
+def sync_tasks():
+    """CPU-bound анализ выполняем в пуле потоков."""
+    LevelAnalyzer().analyze_levels()
+    IndicatorEngine().compute_indicators()
+    TrendAnalyzer().analyze_trends()
+    AlertSystem().check_alerts()
 
+# ──────────────────────────────────────────────────────────────
+async def main():
+    logger.info("🚀 Обновление данных рынка (без сигналов)")
+    DatabaseManager().clear_old_candles()
+
+    # ① сетевые задачи
+    await update_market_data()
+
+    # ② синхронные / тяжёлые задачи
     loop = asyncio.get_running_loop()
     with ThreadPoolExecutor() as pool:
         await loop.run_in_executor(pool, sync_tasks)
 
     logger.info("✅ Все данные обновлены (без сигналов)")
 
+# ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     asyncio.run(main())
 
 
 
-
-
 # run_worker.py
-
-# run_worker.py
-
 
 import logging
 import asyncio
@@ -218,8 +253,6 @@ if __name__ == "__main__":
 
 
 
-
-
 # gui/_init_.py
 
 
@@ -228,7 +261,6 @@ if __name__ == "__main__":
 
 # gui/app.py
 
-# gui/app.py
 import tkinter as tk
 from tkinter import ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -355,7 +387,6 @@ def create_main_window():
     tf_combo.bind("<<ComboboxSelected>>", lambda e: update_chart())
 
     return root
-
 
 
 
@@ -536,10 +567,8 @@ class ChartDrawer:
 
 
 
-
 # gui/fibo_drawer.py
 
-# gui/fibo_drawer.py
 import logging
 import pandas as pd
 import mplfinance as mpf
@@ -594,10 +623,8 @@ class FiboDrawer:
 
 
 
-
 # gui/indicators_drawer.py
 
-# gui/indicators_drawer.py
 import pandas as pd
 import logging
 from database.database import DatabaseManager
@@ -757,9 +784,6 @@ class IndicatorDrawer:
 
 
 
-
-# gui/levels_drawer.py
-
 # gui/levels_drawer.py
 
 import logging
@@ -808,10 +832,8 @@ class LevelDrawer:
 
 
 
-
 # gui/main_layout.py
 
-# gui/main_layout.py
 import tkinter as tk
 from tkinter import ttk
 
@@ -882,10 +904,8 @@ class MainLayout:
 
 
 
-
 # gui/signals_drawer.py
 
-# gui/signals_drawer.py
 import logging
 import pandas as pd
 from database.database import DatabaseManager
@@ -927,10 +947,8 @@ class SignalDrawer:
 
 
 
-
 # gui/tables_drawer.py
 
-# tables_drawer.py
 import tkinter as tk
 from tkinter import ttk, messagebox
 import logging
@@ -941,164 +959,132 @@ logger = logging.getLogger(__name__)
 
 class TableDrawer:
     def __init__(self, master):
+        self.signals_map = {}
         self.master = master
         self.db = DatabaseManager()
 
     def draw_signals_table(self, on_select=None):
-        window = tk.Toplevel(self.master)
-        window.title("Сигналы")
-        window.geometry("1200x600")
+        win = tk.Toplevel(self.master)
+        win.title("Сигналы")
+        win.geometry("1200x600")
 
-        columns = ["symbol", "timeframe", "signal_type", "current_price", "recommendation", "score", "created_at", "details"]
-        tree = ttk.Treeview(window, columns=columns, show="headings")
-        tree.pack(fill=tk.BOTH, expand=True)
+        # ① список колонок (добавлены новые метрики)
+        self.columns = [
+            "symbol", "timeframe", "signal_type", "current_price",
+            "recommendation", "score", "created_at",
+            "rsi", "macd", "stoch_k", "stoch_d",
+            "atr", "adx", "oi", "fund_rate",
+            "supertrend", "vwap", "poc", "sentiment",
+            "details"                                     # оставляем в самом конце
+        ]
 
-        for col in columns:
-            tree.heading(col, text=col.capitalize(), command=lambda c=col: self.sort_by_column(tree, c, False))
-            tree.column(col, anchor="center", width=120)
+        # ② обёртка + scrollbar
+        frame = tk.Frame(win); frame.pack(fill=tk.BOTH, expand=True)
+        xscroll = tk.Scrollbar(frame, orient=tk.HORIZONTAL)
+        xscroll.pack(side=tk.BOTTOM, fill=tk.X)
 
-        self._refresh_signals(tree)
+        # ③ создаём Treeview ДО настройки колонок
+        self.tree = ttk.Treeview(frame,
+                                 columns=self.columns,
+                                 show="headings",
+                                 xscrollcommand=xscroll.set)
+        self.tree.pack(fill=tk.BOTH, expand=True)
+        xscroll.config(command=self.tree.xview)
 
-        ttk.Button(window, text="Обновить", command=lambda: self._refresh_signals(tree)).pack(pady=5)
+        # ④ заголовки / ширины
+        for col in self.columns:
+            self.tree.heading(col, text=col.upper(),
+                              command=lambda c=col: self.sort_by_column(c, False))
+            self.tree.column(col, anchor="w", width=140, stretch=True)
 
+        ttk.Button(win, text="Обновить",
+                   command=self._refresh_signals).pack(pady=5)
+
+        # ⑤ callbacks
         if on_select:
-            def handle_select(event):
-                item = tree.selection()
-                if item:
-                    row_data = tree.item(item[0])["values"]
-                    on_select(row_data)
-            tree.bind("<<TreeviewSelect>>", handle_select)
+            self.tree.bind("<<TreeviewSelect>>",
+                           lambda e: self._handle_select(on_select))
+        self.tree.bind("<Double-1>", self._on_double_click)
 
-        def on_double_click(event):
-            selected = tree.selection()
-            if not selected:
-                return
-            item = tree.item(selected[0], "values")
-            symbol = item[0]
-            timeframe = item[1]
-            details = item[7]  # details = 8-я колонка (0-based index)
-            logger.info(f"📍 Выбран сигнал: {symbol} {timeframe}")
-            messagebox.showinfo(
-                title=f"Детали сигнала: {symbol} ({timeframe})",
-                message=details
-            )
-            if on_select:
-                on_select(symbol, timeframe)
+        self._refresh_signals()   # первая отрисовка
 
-        tree.bind("<Double-1>", on_double_click)
+    # ------------ обновление таблицы -----------------------------
+    def _refresh_signals(self):
+        for row in self.tree.get_children():
+            self.tree.delete(row)
 
-    def _refresh_signals(self, tree):
-        for row in tree.get_children():
-            tree.delete(row)
         try:
-            signals = self.db.get_signals()
-            for row in signals:
-                tree.insert("", "end", values=[
-                    row.get("symbol"),
-                    row.get("timeframe"),
-                    row.get("signal_type"),
-                    float(row.get("current_price", 0)),
-                    row.get("recommendation"),
-                    float(row.get("score", 0)),  # ← ЗДЕСЬ
-                    datetime.fromtimestamp(row.get("created_at")).strftime("%Y-%m-%d %H:%M"),
-                    row.get("details", "")
+            for rec in self.db.get_signals():
+                key = (rec["symbol"], rec["timeframe"], rec["signal_type"])
+                self.signals_map[key] = rec["details"]
+
+                # порядок значений строго = self.columns
+                self.tree.insert("", "end", values=[
+                    rec.get("symbol"),
+                    rec.get("timeframe"),
+                    rec.get("signal_type"),
+                    float(rec.get("current_price", 0)),
+                    rec.get("recommendation"),
+                    float(rec.get("score", 0)),
+                    datetime.fromtimestamp(rec["created_at"]).strftime("%Y-%m-%d %H:%M"),
+                    round(rec.get("rsi", 0), 1)   if rec.get("rsi") else "",
+                    round(rec.get("macd", 0), 4)  if rec.get("macd") else "",
+                    round(rec.get("stoch_k", 0), 1) if rec.get("stoch_k") else "",
+                    round(rec.get("stoch_d", 0), 1) if rec.get("stoch_d") else "",
+                    round(rec.get("atr", 0), 6)  if rec.get("atr") else "",
+                    round(rec.get("adx", 0), 1)  if rec.get("adx") else "",
+                    round(rec.get("oi", 0))      if rec.get("oi") else "",
+                    round(rec.get("fund_rate", 0), 6) if rec.get("fund_rate") else "",
+                    rec.get("supertrend"),
+                    round(rec.get("vwap", 0), 6) if rec.get("vwap") else "",
+                    round(rec.get("poc", 0), 6)  if rec.get("poc") else "",
+                    round(rec.get("sentiment", 0), 1) if rec.get("sentiment") else "",
+                    "…"           # details в отдельном окне; здесь placeholder
                 ])
         except Exception as e:
             logger.error(f"Ошибка при загрузке сигналов: {e}")
 
-    def sort_by_column(self, tree, col, reverse):
+    # ------------ сортировка -------------------------------------
+    def sort_by_column(self, col, reverse):
+        data = [(self.tree.set(k, col), k) for k in self.tree.get_children("")]
         try:
-            data = [(tree.set(k, col), k) for k in tree.get_children("")]
-
-            # Определяем, нужно ли сортировать как float
-            is_numeric = True
-            for val, _ in data:
-                try:
-                    float(val)
-                except (ValueError, TypeError):
-                    is_numeric = False
-                    break
-
-            if is_numeric:
-                data.sort(key=lambda t: float(t[0]), reverse=reverse)
-            else:
-                data.sort(key=lambda t: str(t[0]), reverse=reverse)
-
-        except Exception as e:
-            logger.warning(f"❌ Ошибка сортировки по колонке '{col}': {e}")
+            data.sort(key=lambda t: float(t[0]), reverse=reverse)
+        except ValueError:
             data.sort(key=lambda t: str(t[0]), reverse=reverse)
 
-        for index, (_, k) in enumerate(data):
-            tree.move(k, "", index)
+        for idx, (_, k) in enumerate(data):
+            self.tree.move(k, "", idx)
 
-        tree.heading(col, command=lambda: self.sort_by_column(tree, col, not reverse))
+        self.tree.heading(col,
+                          command=lambda: self.sort_by_column(col, not reverse))
 
-    def draw_alerts_table(self, on_select=None):
-        window = tk.Toplevel(self.master)
-        window.title("Алерты")
-        window.geometry("900x600")
+    # ------------ вспомогательные callbacks ----------------------
+    def _handle_select(self, on_select):
+        sel = self.tree.selection()
+        if sel:
+            vals = self.tree.item(sel[0])["values"]
+            on_select(vals[0], vals[1])       # symbol, timeframe
 
-        columns = ("symbol", "level_price", "current_price", "distance", "type", "strength", "timeframe")
-        tree = ttk.Treeview(window, columns=columns, show="headings")
-        for col in columns:
-            tree.heading(col, text=col, command=lambda _col=col: self._sort_column(tree, _col, False))
-            tree.column(col, anchor=tk.CENTER, width=100)
-        tree.pack(fill="both", expand=True)
-
-        if on_select:
-            tree.bind("<Double-1>", lambda e: self._handle_select(tree, on_select))
-
-        def refresh():
-            for row in tree.get_children():
-                tree.delete(row)
-            try:
-                conn = self.db.get_connection()
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT symbol, level_price, current_price, distance, type, strength, timeframe
-                        FROM alerts
-                        ORDER BY created_at DESC
-                        LIMIT 100
-                    """)
-                    for row in cur.fetchall():
-                        tree.insert("", "end", values=row)
-            except Exception as e:
-                logger.error(f"Ошибка обновления алертов: {e}")
-            finally:
-                self.db.release_connection(conn)
-
-        ttk.Button(window, text="Обновить", command=refresh).pack(pady=5)
-        refresh()
-
-    def _sort_column(self, tree, col, reverse):
-        try:
-            l = [(tree.set(k, col), k) for k in tree.get_children('')]
-            l.sort(key=lambda t: float(t[0]) if t[0].replace('.', '', 1).isdigit() else t[0], reverse=reverse)
-        except ValueError:
-            l.sort(reverse=reverse)
-        for index, (_, k) in enumerate(l):
-            tree.move(k, '', index)
-        tree.heading(col, command=lambda: self._sort_column(tree, col, not reverse))
-
-    def _handle_select(self, tree, callback):
-        selected = tree.selection()
-        if not selected:
+    def _on_double_click(self, _event):
+        sel = self.tree.selection()
+        if not sel:
             return
-        item = tree.item(selected[0], "values")
-        columns = tree["columns"]
+        vals = self.tree.item(sel[0], "values")
+        key  = (vals[0], vals[1], vals[2])    # symbol, timeframe, type
+        details = self.signals_map.get(key, [])
+        if isinstance(details, str):
+            import ast
+            try: details = ast.literal_eval(details)
+            except: pass
 
-        if columns == ("symbol", "timeframe", "signal_type", "price", "time", "indicator", "score"):
-            symbol = item[0]
-            timeframe = item[1]
-        elif columns == ("symbol", "level_price", "current_price", "distance", "type", "strength", "timeframe"):
-            symbol = item[0]
-            timeframe = item[6]
-        else:
-            logger.warning(f"❌ Не удалось определить формат строки таблицы: {item}")
-            return
-
-        callback(symbol, timeframe)
-
+        top = tk.Toplevel(self.tree)
+        top.title(f"Детали сигнала: {vals[0]} ({vals[1]})")
+        txt = tk.Text(top, wrap=tk.WORD)
+        txt.insert(tk.END,
+                   "\n".join(details) if isinstance(details, list) else str(details))
+        txt.config(state=tk.NORMAL)
+        txt.pack(expand=True, fill=tk.BOTH)
+        tk.Button(top, text="Закрыть", command=top.destroy).pack(pady=5)
 
 
 
@@ -1171,7 +1157,6 @@ class Settings:
 
 # database/database.py
 
-# database/database.py
 import os
 import logging
 import psycopg2
@@ -1183,15 +1168,28 @@ import numpy as np
 from datetime import datetime
 import time
 import re
+MAX_CONN = 50
 
 from config.constants import DB_CONFIG  # теперь так
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+
 class DatabaseManager:
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __init__(self):
-        logger.debug("🔌 Инициализация DatabaseManager")
+        if hasattr(self, "_initialized"):
+            return
+        self._initialized = True
+
         self.db_config = {
             'dbname': os.getenv('DB_NAME', 'postgres'),
             'user': os.getenv('DB_USER', 'postgres'),
@@ -1199,13 +1197,22 @@ class DatabaseManager:
             'host': os.getenv('DB_HOST', 'localhost'),
             'port': os.getenv('DB_PORT', '5432')
         }
-        # Создаем пул соединений ДО создания таблиц
+
         self.connection_pool = psycopg2.pool.ThreadedConnectionPool(
-            minconn=5,
-            maxconn=20,
+            minconn=10,
+            maxconn=30,
             **self.db_config
         )
+
         logger.debug("✅ Успешное подключение к БД")
+
+    @classmethod
+    def init_schema_once(cls):
+        instance = cls()
+        instance._create_tables()
+        instance._create_indexes()
+        logger.info("✅ База инициализирована один раз")
+        return instance
         # Теперь можно безопасно создавать таблицы
         self._create_tables()
         self._create_indexes()
@@ -1337,10 +1344,22 @@ class DatabaseManager:
             """,
             """
             ALTER TABLE signals
-            ADD COLUMN IF NOT EXISTS score INT,          
+            ADD COLUMN IF NOT EXISTS score INT,
             ADD COLUMN IF NOT EXISTS details TEXT,
             ADD COLUMN IF NOT EXISTS recommendation VARCHAR(50),
-            ADD COLUMN IF NOT EXISTS current_price DECIMAL(20,8);
+            ADD COLUMN IF NOT EXISTS current_price DECIMAL(20,8),
+            ADD COLUMN IF NOT EXISTS rsi DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS macd DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS ema50 DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS ema200 DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS bb_position DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS stoch_k DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS stoch_d DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS atr DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS adx DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS vwap DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS poc DOUBLE PRECISION;
+
             """,
         ]
 
@@ -1375,6 +1394,7 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_levels_symbol_timeframe ON levels (symbol, timeframe);",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_unique ON signals (symbol, timeframe, signal_type, time);"
             "CREATE INDEX IF NOT EXISTS idx_levels_price ON levels (price);"
+            "CREATE INDEX IF NOT EXISTS idx_indicators_sym_tf ON indicators(symbol, timeframe);"
         ]
         conn = self.get_connection()
         try:
@@ -1495,7 +1515,7 @@ class DatabaseManager:
         try:
             with conn.cursor() as cur:
                 # Очищаем 1d старше 3 месяцев
-                cur.execute(""" 
+                cur.execute("""
                     UPDATE collected_candles
                     SET candles = COALESCE((
                         SELECT jsonb_agg(c)
@@ -1506,7 +1526,7 @@ class DatabaseManager:
                 """)
 
                 # Очищаем 4h и 1h старше 1 месяца
-                cur.execute(""" 
+                cur.execute("""
                     UPDATE collected_candles
                     SET candles = COALESCE((
                         SELECT jsonb_agg(c)
@@ -1517,7 +1537,7 @@ class DatabaseManager:
                 """)
 
                 # Очищаем 15m старше 2 недель
-                cur.execute(""" 
+                cur.execute("""
                     UPDATE collected_candles
                     SET candles = COALESCE((
                         SELECT jsonb_agg(c)
@@ -1613,6 +1633,22 @@ class DatabaseManager:
         finally:
             self.release_connection(conn)
 
+    def get_all_trends(self):
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT symbol, direction, ema50, ema200 FROM trend_cache")
+                rows = cur.fetchall()
+                return [
+                    {"symbol": row[0], "direction": row[1], "ema50": float(row[2]), "ema200": float(row[3])}
+                    for row in rows
+                ]
+        except Exception as e:
+            logger.error(f"Ошибка получения всех трендов: {e}")
+            return []
+        finally:
+            self.release_connection(conn)
+
     def get_trend(self, symbol: str):
         conn = self.get_connection()
         try:
@@ -1646,7 +1682,7 @@ class DatabaseManager:
                 # Используем UPSERT для обновления или вставки
                 insert_query = """
                                INSERT INTO trend_cache (symbol, direction, ema50, ema200, last_updated)
-                               VALUES (%s, %s, %s, %s, TO_TIMESTAMP(%s)) ON CONFLICT (symbol) 
+                               VALUES (%s, %s, %s, %s, TO_TIMESTAMP(%s)) ON CONFLICT (symbol)
                     DO \
                                UPDATE SET
                                    direction = EXCLUDED.direction, \
@@ -1729,32 +1765,56 @@ class DatabaseManager:
         query = """
         INSERT INTO signals (
             symbol, timeframe, signal_type, price,
-            recommendation, score, details, current_price, time
+            recommendation, score, details, current_price, time,
+            rsi, macd, ema50, ema200, bb_position, stoch_k, stoch_d,
+            atr, adx, vwap, poc
         )
         VALUES %s
         ON CONFLICT (symbol, timeframe, signal_type, time) DO UPDATE
         SET current_price = EXCLUDED.current_price,
             recommendation = EXCLUDED.recommendation,
             score = EXCLUDED.score,
-            details = EXCLUDED.details
+            details = EXCLUDED.details,
+            rsi = EXCLUDED.rsi,
+            macd = EXCLUDED.macd,
+            ema50 = EXCLUDED.ema50,
+            ema200 = EXCLUDED.ema200,
+            bb_position = EXCLUDED.bb_position,
+            stoch_k = EXCLUDED.stoch_k,
+            stoch_d = EXCLUDED.stoch_d,
+            atr = EXCLUDED.atr,
+            adx = EXCLUDED.adx,
+            vwap = EXCLUDED.vwap,
+            poc = EXCLUDED.poc
         """
 
-        # Убираем np.float64 → float
         for s in signals:
-            if isinstance(s.get("current_price"), np.generic):
-                s["current_price"] = float(s["current_price"])
+            for key in ["current_price", "rsi", "macd", "ema50", "ema200", "bb_position", "stoch_k", "stoch_d"]:
+                if isinstance(s.get(key), np.generic):
+                    s[key] = float(s[key])
 
         values = [
             (
                 s["symbol"],
                 s["timeframe"],
                 s["signal_type"],
-                s.get("price", s.get("current_price", 0.0)),  # → поле price
+                float(s.get("price", s.get("current_price", 0.0))),
                 s.get("recommendation", ""),
-                s.get("score", 0),
+                int(s.get("score", 0)),
                 s.get("details", ""),
-                s.get("current_price", 0.0),
-                int(time.time() * 1000)
+                float(s.get("current_price", 0.0)),
+                int(time.time() * 1000),
+                s.get("rsi"),
+                s.get("macd"),
+                s.get("ema50"),
+                s.get("ema200"),
+                s.get("bb_position"),
+                s.get("stoch_k"),
+                s.get("stoch_d"),
+                s.get("atr"),
+                s.get("adx"),
+                s.get("vwap"),
+                s.get("poc"),
             )
             for s in signals
         ]
@@ -1768,9 +1828,11 @@ class DatabaseManager:
         finally:
             self.connection_pool.putconn(conn)
 
+
     def get_signals(self, limit=100):
         query = """
-        SELECT symbol, timeframe, signal_type, current_price, recommendation, score, details, time
+        SELECT symbol, timeframe, signal_type, current_price, recommendation, score,
+               details, time, rsi, macd, ema50, ema200, bb_position, stoch_k, stoch_d
         FROM signals
         ORDER BY time DESC
         LIMIT %s
@@ -1793,7 +1855,14 @@ class DatabaseManager:
                 "recommendation": row[4],
                 "score": row[5],
                 "details": row[6],
-                "created_at": int(row[7]) // 1000  # UNIX timestamp в секундах
+                "created_at": int(row[7]) // 1000,
+                "rsi": row[8],
+                "macd": row[9],
+                "ema50": row[10],
+                "ema200": row[11],
+                "bb_position": row[12],
+                "stoch_k": row[13],
+                "stoch_d": row[14],
             })
         return result
 
@@ -1857,7 +1926,6 @@ class DatabaseManager:
 
 
 
-
 # database/schema.py
 
 
@@ -1895,6 +1963,7 @@ from datetime import datetime
 
 from database.database import DatabaseManager
 
+EXCLUDED_STABLES = {"USDC", "BUSD", "TUSD", "PAX", "USDP", "DAI", "FDUSD", "EUR", "UST", "USDD", "SUSD", "USDT", "XUSD"}
 logger = logging.getLogger(__name__)
 
 
@@ -1913,6 +1982,10 @@ class AlertSystem:
             symbol = lvl["symbol"]
             timeframe = lvl["timeframe"]
             price_level = float(lvl["price"])
+
+            # Исключаем стейблкоины
+            if any(stable in symbol for stable in EXCLUDED_STABLES):
+                continue
 
             current_price = self.db.get_current_price(symbol, timeframe)
             if current_price is None:
@@ -1963,56 +2036,108 @@ def build_candle_cache():
 
 # services/collector.py
 
-# services/collector.py
 import asyncio
 import aiohttp
 import logging
-from datetime import datetime
-from database.database import DatabaseManager
-from config.constants import BINANCE_TICKER_URL
 import json
+from datetime import datetime
+
+from database.database import DatabaseManager
+from config.constants import BINANCE_TICKER_URL, CANDLE_SETTINGS
 
 logger = logging.getLogger(__name__)
 
 TIMEFRAMES = ["1d", "4h", "1h", "15m"]
+EXCLUDED_STABLES = {"USDC", "BUSD", "TUSD", "PAX", "USDP", "DAI", "FDUSD", "EUR", "UST", "USDD", "SUSD", "USDT", "XUSD"}
+
 
 class DataCollector:
     def __init__(self):
         self.db = DatabaseManager()
 
-    async def fetch_candles(self, session, symbol, interval):
+    # -------------------------------------------------
+    # 1. Загрузка свечей для одной пары-таймфрейма
+    # -------------------------------------------------
+    async def fetch_candles(self, session, symbol: str, interval: str):
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit=500"
         try:
             async with session.get(url, timeout=10) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    candles = [{
-                        "time": int(c[0]),
-                        "open": float(c[1]),
-                        "high": float(c[2]),
-                        "low": float(c[3]),
-                        "close": float(c[4]),
-                        "volume": float(c[5])
-                    } for c in data]
-                    return symbol, interval, candles
-                else:
+                if resp.status != 200:
                     logger.error(f"❌ Ошибка загрузки {symbol} {interval}: {resp.status}")
                     return symbol, interval, []
+
+                data = await resp.json()
+                candles = [
+                    {
+                        "time":   int(c[0]),
+                        "open":   float(c[1]),
+                        "high":   float(c[2]),
+                        "low":    float(c[3]),
+                        "close":  float(c[4]),
+                        "volume": float(c[5])
+                    }
+                    for c in data
+                ]
+                return symbol, interval, candles
+
         except Exception as e:
             logger.error(f"❌ Ошибка подключения {symbol} {interval}: {e}")
             return symbol, interval, []
 
+    # -------------------------------------------------
+    # 2. Основной метод: обновляем ВСЕ таймфреймы
+    # -------------------------------------------------
     async def update_all_timeframes(self):
         symbols = self.db.get_symbols_from_cache()
         if not symbols:
             logger.warning("⚠️ Нет символов для загрузки")
             return
 
-        async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as session:
-            tasks = [self.fetch_candles(session, s, tf) for s in symbols for tf in TIMEFRAMES]
-            results = await asyncio.gather(*tasks)
-            self.bulk_upsert_candles(results)
+        # Исключаем стейблкоины
+        symbols = [s for s in symbols if not any(stable in s for stable in EXCLUDED_STABLES)]
 
+        need_update = []
+        conn = self.db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                for s in symbols:
+                    for tf, cfg in CANDLE_SETTINGS.items():
+                        cur.execute(
+                            """
+                            SELECT last_updated
+                              FROM collected_candles
+                             WHERE symbol = %s
+                               AND timeframe = %s
+                            """,
+                            (s, tf),
+                        )
+                        row = cur.fetchone()
+                        if (
+                            row is None
+                            or (datetime.now() - row[0]).total_seconds() > cfg["update_freq"]
+                        ):
+                            need_update.append((s, tf))
+        finally:
+            self.db.release_connection(conn)
+
+        if not need_update:
+            logger.info("✅ Все таймфреймы свежие — загрузка не требуется")
+            return
+
+        async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as session:
+            tasks = [self.fetch_candles(session, sym, tf) for sym, tf in need_update]
+            results = await asyncio.gather(*tasks)
+
+            for symbol, tf, candles in results:
+                if candles:
+                    self.db.upsert_candles(symbol, tf, candles)
+                    logger.info(f"✅ Обновлены свечи: {symbol} {tf} ({len(candles)})")
+        # ---- Сохраняем в БД ----
+        self.bulk_upsert_candles(results)
+
+    # -------------------------------------------------
+    # 3. Массовая вставка/обновление свечей
+    # -------------------------------------------------
     def bulk_upsert_candles(self, results):
         conn = self.db.get_connection()
         now = datetime.now()
@@ -2021,14 +2146,19 @@ class DataCollector:
                 for symbol, timeframe, candles in results:
                     if not candles:
                         continue
-                    cur.execute("""
-                        INSERT INTO collected_candles (symbol, timeframe, candles, updated_at)
+                    cur.execute(
+                        """
+                        INSERT INTO collected_candles (symbol, timeframe, candles, last_updated)
                         VALUES (%s, %s, %s, %s)
                         ON CONFLICT (symbol, timeframe)
-                        DO UPDATE SET candles = EXCLUDED.candles, updated_at = EXCLUDED.updated_at
-                    """, (symbol, timeframe, json.dumps(candles), now))
+                        DO UPDATE
+                            SET candles      = EXCLUDED.candles,
+                                last_updated = EXCLUDED.last_updated
+                        """,
+                        (symbol, timeframe, json.dumps(candles), now),
+                    )
             conn.commit()
-            logger.info(f"💾 Загружены свечи для {len(results)} комбинаций symbol/timeframe")
+            logger.info(f"💾 Загружены свечи для {len([r for r in results if r[2]])} комбинаций symbol/timeframe")
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения свечей: {e}")
             conn.rollback()
@@ -2036,9 +2166,6 @@ class DataCollector:
             self.db.release_connection(conn)
 
 
-
-
-# services/data_manager.py
 
 # services/data_manager.py
 
@@ -2137,9 +2264,6 @@ def clear_database():
 
 
 
-
-# services/deep_an.py
-
 # services/deep_an.py
 
 import aiohttp
@@ -2221,6 +2345,99 @@ class MarketCapTracker:
 
 
 
+# services/derivatives_engine.py
+
+import aiohttp
+import asyncio
+import logging
+from asyncio import Semaphore
+
+from database.database import DatabaseManager
+
+logger = logging.getLogger(__name__)
+BINANCE_FAPI = "https://fapi.binance.com"
+
+
+class DerivativesEngine:
+    def __init__(self):
+        self.db = DatabaseManager()
+
+    async def _fetch_json(self, url, params=None, retries=3):
+        for attempt in range(retries):
+            try:
+                async with aiohttp.ClientSession() as s:
+                    async with s.get(url, params=params, timeout=7) as r:
+                        if r.status == 200:
+                            return await r.json()
+                        else:
+                            logger.warning(f"⚠️ Ошибка ответа {r.status} от {url} для {params}")
+                            return None
+            except Exception as e:
+                logger.error(f"❌ Ошибка подключения к {url} для {params}: {e}")
+                await asyncio.sleep(1 + attempt)  # задержка перед повтором
+        return None
+
+    async def update_metrics(self, symbol: str):
+        # Удаляем лишние символы, если есть
+        symbol = symbol.replace("/", "")
+
+        oi = await self._fetch_json(f"{BINANCE_FAPI}/fapi/v1/openInterest", {"symbol": symbol})
+        if oi is None:
+            logger.warning(f"⚠️ Ошибка openInterest для {symbol} — пропускаем")
+            return
+
+        fr = await self._fetch_json(f"{BINANCE_FAPI}/fapi/v1/fundingRate", {"symbol": symbol, "limit": 1})
+        if not fr or not isinstance(fr, list) or "fundingRate" not in fr[0]:
+            logger.warning(f"⚠️ Ошибка fundingRate для {symbol} — пропускаем")
+            return
+
+        records = [
+            dict(symbol=symbol, timeframe="1h", indicator_type="OI", value=oi["openInterest"]),
+            dict(symbol=symbol, timeframe="1h", indicator_type="FUND_RATE", value=fr[0]["fundingRate"]),
+        ]
+        self._save(records)
+
+    async def _usdt_symbols(self, quote="USDT") -> list[str]:
+        conn = self.db.get_connection()
+        with conn, conn.cursor() as cur:
+            cur.execute("SELECT symbol FROM pairs_cache WHERE symbol ILIKE %s", (f"%{quote}",))
+            return [row[0] for row in cur.fetchall()]
+
+    async def update_metrics_for_all(self):
+        symbols = await self._usdt_symbols()
+        sem = Semaphore(5)
+
+        async def _guarded(sym):
+            async with sem:
+                await self.update_metrics(sym)
+
+        await asyncio.gather(*[_guarded(s) for s in symbols])
+
+    def _save(self, records):
+        conn = self.db.get_connection()
+        try:
+            sql = """
+            INSERT INTO indicators (symbol, timeframe, indicator_type, value, created_at)
+            VALUES (%s, %s, %s, %s, NOW())
+            ON CONFLICT (symbol, timeframe, indicator_type)
+            DO UPDATE SET value = EXCLUDED.value, created_at = EXCLUDED.created_at
+            """
+            with conn.cursor() as cur:
+                for r in records:
+                    cur.execute(sql, (
+                        r["symbol"],
+                        r["timeframe"],
+                        r["indicator_type"],
+                        str(r["value"])
+                    ))
+            conn.commit()
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения деривативов: {e}")
+            conn.rollback()
+        finally:
+            self.db.release_connection(conn)
+
+
 
 # services/enter_exit_engine.py
 
@@ -2230,7 +2447,6 @@ class MarketCapTracker:
 
 # services/fibo_engine.py
 
-# services/fibo_engine.py
 import logging
 import pandas as pd
 from database.database import DatabaseManager
@@ -2265,17 +2481,15 @@ class FiboEngine:
 
 
 
-
-
 # services/identifier.py
 
-# services/identifier.py
 import aiohttp
 import asyncio
 import logging
 from datetime import datetime
 from database.database import DatabaseManager
 from config.constants import BINANCE_TICKER_URL
+
 
 logger = logging.getLogger(__name__)
 
@@ -2323,12 +2537,11 @@ class PairIdentifier:
 
 
 
-
 # services/indicator_engine.py
 
-# services/indicator_engine.py
 import logging
 from datetime import datetime
+
 
 import numpy as np
 import pandas as pd
@@ -2343,12 +2556,14 @@ class IndicatorEngine:
         self.db = DatabaseManager()
 
     def compute_indicators(self):
-        """Основной метод вычисления и сохранения индикаторов"""
+        """Вычисляет и сохраняет полный набор индикаторов для каждой пары-таймфрейма."""
         all_candles = self.db.get_all_candles()
-        indicators = []
+        indicators: list[dict] = []
+
 
         for (symbol, tf), candles in all_candles.items():
-            if len(candles) < 100:
+            # Нужна хотя бы 200-дневная история для EMA-200
+            if len(candles) < 200:
                 continue
 
             df = pd.DataFrame(candles)
@@ -2356,37 +2571,100 @@ class IndicatorEngine:
             df["high"] = pd.to_numeric(df["high"])
             df["low"] = pd.to_numeric(df["low"])
 
-            # RSI
+            # ── базовые расчёты ───────────────────────────────────────────────────
             rsi = self._rsi(df["close"])
-            # MACD
-            macd_line, macd_signal = self._macd(df["close"])
-            # EMA20
+            macd_line, macd_sig, _ = self._macd(df["close"])
+            macd_hist = macd_line - macd_sig  # ← добавь эту строку
             ema20 = df["close"].ewm(span=20, adjust=False).mean()
-            # BB
-            upper, middle, lower = self._bollinger_bands(df["close"])
+            ema50 = df["close"].ewm(span=50, adjust=False).mean()
+            ema200 = df["close"].ewm(span=200, adjust=False).mean()
+            bb_up, bb_mid, bb_lo = self._bollinger_bands(df["close"])
+            stoch_k, stoch_d = self._stochastic(df)
 
-            last = df.iloc[-1]
+            # ── объём / ликвидность ───────────────────────────────
+            obv = self._obv(df["close"], df["volume"])
+            vwap = self._vwap(df)  # 20-периодная
+            poc = self._vpvr_poc(df)  # VPVR POC за N свечей
 
+            # ── сила тренда и волатильность ───────────────────────
+            atr = self._atr(df)  # 14-p ATR
+            adx = self._adx(df)  # 14-p ADX
+
+            # ── super-trend (по ATR) ──────────────────────────────
+            supertrend = self._supertrend(df, atr)
+
+
+            # # === Индикаторы ===
+            # rsi = self._rsi(df)
+            # macd_line, macd_sig, macd = self._macd(df)
+            # ema20 = self._ema(df, 20)
+            # ema50 = self._ema(df, 50)
+            # ema200 = self._ema(df, 200)
+            # bb_up, bb_mid, bb_lo = self._bollinger_bands(df["close"])
+            # stoch_k, stoch_d = self._stochastic(df)
+            # obv = self._obv(df["close"], df["volume"])
+            # vwap = self._vwap(df)
+            # poc = self._vpvr_poc(df)
+            # atr = self._atr(df)
+            # adx = self._adx(df)
+            # supertrend = self._supertrend(df, atr)
+
+            last_close = df["close"].iloc[-1]
             recommendation = self._recommend(
-                last_close=last["close"],
+                last_close=last_close,
                 ema20=ema20.iloc[-1],
                 rsi_val=rsi.iloc[-1],
                 macd_val=macd_line.iloc[-1],
-                macd_sig=macd_signal.iloc[-1],
-                bb_middle=middle.iloc[-1]
+                macd_sig=macd_sig.iloc[-1],
+                macd_hist=macd_hist.iloc[-1],  # ← добавь эту строку
+                bb_middle=bb_mid.iloc[-1]
             )
 
-            indicators.append({
-                "symbol": symbol,
-                "timeframe": tf,
-                "rsi": rsi.iloc[-1],
-                "macd": macd_line.iloc[-1],
-                "ema20": ema20.iloc[-1],
-                "recommendation": recommendation
-            })
+            indicators.append(dict(
+                symbol=symbol,
+                timeframe=tf,
+                rsi=rsi.iloc[-1],
+                macd=macd_hist.iloc[-1],  # можно оставить старое имя macd
+                macd_hist=macd_hist.iloc[-1],  # ← добавь эту строку
+                ema20=ema20.iloc[-1],
+                ema50=ema50.iloc[-1],
+                ema200=ema200.iloc[-1],
+                bb_upper=bb_up.iloc[-1],
+                bb_lower=bb_lo.iloc[-1],
+                stoch_k=stoch_k.iloc[-1],
+                stoch_d=stoch_d.iloc[-1],
+                obv=obv.iloc[-1],
+                vwap=vwap.iloc[-1],
+                poc=poc if not hasattr(poc, "iloc") else float(poc.iloc[-1]),
+                atr=atr.iloc[-1],
+                adx=adx.iloc[-1],
+                supertrend=supertrend.iloc[-1],
+                recommendation=recommendation,
+            ))
+
+            indicators_to_save = [
+                {"type": "RSI", "value": rsi.iloc[-1]},
+                {"type": "MACD", "value": macd_hist.iloc[-1]},
+                {"type": "EMA50", "value": ema50.iloc[-1]},
+                {"type": "EMA200", "value": ema200.iloc[-1]},
+                {"type": "BB_UPPER", "value": bb_up.iloc[-1]},
+                {"type": "BB_LOWER", "value": bb_lo.iloc[-1]},
+                {"type": "STOCH_K", "value": stoch_k.iloc[-1]},
+                {"type": "STOCH_D", "value": stoch_d.iloc[-1]},
+                {"type": "ATR", "value": atr.iloc[-1]},
+                {"type": "ADX", "value": adx.iloc[-1]},
+                {"type": "VWAP", "value": vwap.iloc[-1]},
+                {"type": "POC", "value": poc if not hasattr(poc, "iloc") else float(poc.iloc[-1])}
+            ]
+
+
+
 
         self._save_indicators(indicators)
         return indicators
+
+    def _ema(self, df, period):
+        return df["close"].ewm(span=period, adjust=False).mean()
 
     def _rsi(self, series, period=14):
         delta = series.diff()
@@ -2402,7 +2680,8 @@ class IndicatorEngine:
         ema_slow = series.ewm(span=slow, adjust=False).mean()
         macd_line = ema_fast - ema_slow
         signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-        return macd_line, signal_line
+        macd_hist = macd_line - signal_line
+        return macd_line, signal_line, macd_hist
 
     def _bollinger_bands(self, series, period=20):
         middle = series.rolling(window=period).mean()
@@ -2411,16 +2690,23 @@ class IndicatorEngine:
         lower = middle - 2 * std
         return upper, middle, lower
 
-    def _recommend(self, last_close, ema20, rsi_val, macd_val, macd_sig, bb_middle):
-        if (ema20 > bb_middle and
-            50 < rsi_val < 70 and
-            macd_val > macd_sig and
-            last_close > bb_middle):
+    def _recommend(
+            self,
+            last_close: float,
+            ema20: float,
+            rsi_val: float,
+            macd_val: float,
+            macd_sig: float,
+            macd_hist: float,  # ← добавили
+            bb_middle: float
+    ) -> str:
+        """Простая heursitics-рекоммендация."""
+        long_ok = macd_val > macd_sig and macd_hist > 0
+        short_ok = macd_val < macd_sig and macd_hist < 0
+
+        if ema20 > bb_middle and 50 < rsi_val < 70 and long_ok and last_close > bb_middle:
             return "ПОКУПАТЬ"
-        elif (ema20 < bb_middle and
-              30 < rsi_val < 50 and
-              macd_val < macd_sig and
-              last_close < bb_middle):
+        if ema20 < bb_middle and 30 < rsi_val < 50 and short_ok and last_close < bb_middle:
             return "ПРОДАВАТЬ"
         return "НАБЛЮДАТЬ"
 
@@ -2431,49 +2717,106 @@ class IndicatorEngine:
         d = k.rolling(window=d_period).mean()
         return k, d
 
-    def _save_indicators(self, records):
+    def _obv(self, close, volume):
+        direction = np.sign(close.diff().fillna(0))
+        return (volume * direction).cumsum()
+
+    def _vwap(self, df, period=20):
+        pv = (df["high"] + df["low"] + df["close"]) / 3 * df["volume"]
+        return pv.rolling(period).sum() / df["volume"].rolling(period).sum()
+
+    def _vpvr_poc(self, df, bins=24):
+        hist, edges = np.histogram(df["close"], bins=bins, weights=df["volume"])
+        idx = hist.argmax()
+        return (edges[idx] + edges[idx + 1]) / 2
+
+    def _atr(self, df, period=14):
+        tr = pd.concat([
+            df["high"] - df["low"],
+            (df["high"] - df["close"].shift()).abs(),
+            (df["low"] - df["close"].shift()).abs()
+        ], axis=1).max(axis=1)
+        return tr.rolling(period).mean()
+
+    def _adx(self, df, period=14):
+        up = df["high"].diff()
+        dn = -df["low"].diff()
+        plus_dm = np.where((up > dn) & (up > 0), up, 0.0)
+        minus_dm = np.where((dn > up) & (dn > 0), dn, 0.0)
+        tr = self._atr(df, 1)  # true range дневной
+        plus_di = 100 * pd.Series(plus_dm).ewm(span=period).mean() / tr
+        minus_di = 100 * pd.Series(minus_dm).ewm(span=period).mean() / tr
+        dx = (abs(plus_di - minus_di) / (plus_di + minus_di)).fillna(0) * 100
+        return dx.ewm(span=period).mean()
+
+    def _supertrend(self, df, atr, factor=3):
+        hl2 = (df["high"] + df["low"]) / 2
+        upper = hl2 + factor * atr
+        lower = hl2 - factor * atr
+        trend = pd.Series(index=df.index, dtype=bool)
+        trend.iloc[0] = True
+        for i in range(1, len(df)):
+            if df["close"].iloc[i] > upper.iloc[i - 1]:
+                trend.iloc[i] = True
+            elif df["close"].iloc[i] < lower.iloc[i - 1]:
+                trend.iloc[i] = False
+            else:
+                trend.iloc[i] = trend.iloc[i - 1]
+                upper.iloc[i] = min(upper.iloc[i], upper.iloc[i - 1]) if trend.iloc[i] else upper.iloc[i]
+                lower.iloc[i] = max(lower.iloc[i], lower.iloc[i - 1]) if not trend.iloc[i] else lower.iloc[i]
+        return trend
+
+    def _save_indicators(self, records: list[dict]):
+        """Сохраняет рассчитанные индикаторы в таблицу `indicators`."""
+        if not records:
+            return
+
+        import numpy as np  # нужен для проверки np.floating
+
         conn = self.db.get_connection()
+        insert_sql = """
+            INSERT INTO indicators (symbol, timeframe, indicator_type, value, created_at)
+            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (symbol, timeframe, indicator_type)
+            DO UPDATE SET value = EXCLUDED.value,
+                          created_at = EXCLUDED.created_at;
+        """
+
+        names = [
+            "RSI", "MACD", "MACD_HIST", "EMA20", "EMA50", "EMA200",
+            "BB_UPPER", "BB_LOWER", "STOCH_K", "STOCH_D", "RECOMMENDATION", "OBV", "VWAP", "VPVR_POC", "ATR", "ADX", "SUPERTREND"
+        ]
+
         try:
             with conn.cursor() as cur:
-                insert = """
-                    INSERT INTO indicators (symbol, timeframe, indicator_type, value, created_at)
-                    VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
-                    ON CONFLICT (symbol, timeframe, indicator_type)
-                    DO UPDATE SET
-                    value = EXCLUDED.value,
-                    created_at = EXCLUDED.created_at;
-                    """
                 for rec in records:
-                    for name in ["RSI", "MACD", "EMA20", "RECOMMENDATION"]:
-                        val = rec.get(name.lower() if name != "RECOMMENDATION" else "recommendation")
+                    for name in names:
+                        key = "recommendation" if name == "RECOMMENDATION" else name.lower()
+                        val = rec.get(key)
                         if val is None:
                             continue
-                        try:
-                            val = float(val)
-                        except Exception:
-                            val = str(val)
 
-                        cur.execute(insert, (
-                            rec["symbol"],
-                            rec["timeframe"],
-                            name,
-                            val
-                        ))
-                conn.commit()
+                        # numpy → float | строка → str
+                        if isinstance(val, (float, int, np.floating)):
+                            val_db = float(val)
+                        else:
+                            val_db = str(val)
+
+                        cur.execute(
+                            insert_sql,
+                            (rec["symbol"], rec["timeframe"], name, val_db)
+                        )
+            conn.commit()
         except Exception as e:
-            logger.error(f"❌ Ошибка сохранения индикаторов: {e}")
             conn.rollback()
+            logger.error(f"❌ Ошибка сохранения индикаторов: {e}", exc_info=True)
         finally:
             self.db.release_connection(conn)
 
 
 
-
-
-
 # services/level_engine.py
 
-# services/level_engine.py
 import logging
 from datetime import datetime
 import numpy as np
@@ -2599,8 +2942,102 @@ class LevelAnalyzer:
 
 
 
+# services/sentiment_engine.py
 
-# services/signal_engine.py
+import aiohttp
+import asyncio
+import logging
+
+from database.database import DatabaseManager
+
+BINANCE_FAPI = "https://fapi.binance.com"
+logger = logging.getLogger(__name__)
+
+
+class SentimentEngine:
+    def __init__(self):
+        self.db = DatabaseManager()
+
+    async def _fetch_json(self, url, params=None, timeout=7):
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(url, params=params, timeout=timeout) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+                    else:
+                        logger.warning(f"⚠️ Ошибка ответа {resp.status} от {url} для {params}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка подключения к {url} для {params}: {e}")
+        return None
+
+    def _save(self, rows):
+        conn = self.db.get_connection()
+        try:
+            sql = """
+            INSERT INTO indicators (symbol, timeframe, indicator_type, value, created_at)
+            VALUES (%s, %s, %s, %s, NOW())
+            ON CONFLICT (symbol, timeframe, indicator_type)
+            DO UPDATE SET value = EXCLUDED.value, created_at = EXCLUDED.created_at
+            """
+            with conn.cursor() as cur:
+                for r in rows:
+                    cur.execute(sql, (
+                        r["symbol"],
+                        r["timeframe"],
+                        r["indicator_type"],
+                        str(r["value"])
+                    ))
+            conn.commit()
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения сентимента: {e}")
+            conn.rollback()
+        finally:
+            self.db.release_connection(conn)
+
+    async def _usdt_symbols(self, quote="USDT"):
+        conn = self.db.get_connection()
+        with conn, conn.cursor() as cur:
+            cur.execute("SELECT symbol FROM pairs_cache WHERE symbol ILIKE %s", (f"%{quote}",))
+            return [row[0] for row in cur.fetchall()]
+
+    async def update_for_all(self, quote="USDT", interval="5m", max_concurrent=10):
+        symbols = await self._usdt_symbols(quote)
+        if not symbols:
+            logger.warning("SentimentEngine: не найдено ни одной пары с USDT")
+            return
+
+        sem = asyncio.Semaphore(max_concurrent)
+
+        async def _guarded(sym):
+            async with sem:
+                await self.update(symbol=sym, interval=interval)
+
+        await asyncio.gather(*[_guarded(s) for s in symbols])
+
+    async def update(self, symbol="BTCUSDT", interval="5m"):
+        symbol = symbol.replace("/", "").upper()
+        url = f"{BINANCE_FAPI}/futures/data/globalLongShortAccountRatio"
+        data = await self._fetch_json(url, {
+            "symbol": symbol,
+            "period": interval,
+            "limit": 1
+        })
+
+        if not data:
+            return
+
+        rec = data[0]
+        longs = float(rec["longAccount"])
+        shorts = float(rec["shortAccount"])
+        ratio = 100 * longs / (longs + shorts)
+
+        rows = [
+            {"symbol": symbol, "timeframe": interval, "indicator_type": "LONGS_RATIO", "value": ratio},
+            {"symbol": symbol, "timeframe": interval, "indicator_type": "SHORTS_RATIO", "value": 100 - ratio},
+        ]
+        self._save(rows)
+
+
 
 # services/signal_engine.py
 
@@ -2609,6 +3046,7 @@ import pandas as pd
 from database.database import DatabaseManager
 from services.fibo_engine import FiboEngine
 from services.signal_score import SignalScorer
+from services.alert_engine import AlertSystem
 
 logger = logging.getLogger(__name__)
 
@@ -2619,93 +3057,88 @@ class SignalEngine:
         self.scorer = SignalScorer()
 
     def generate_signals(self):
+        """Формирует сигналы на основе пришедших алертов и текущих данных."""
         logger.info("📊 Генерация сигналов из алертов и свечей...")
 
-        alerts = self.db.get_alerts()
+
+
+        alerts = AlertSystem().check_alerts()
         if not alerts:
             logger.warning("⚠️ Нет алертов для анализа")
             return
 
         all_candles = self.db.get_all_candles()
         all_levels = self.db.get_levels()
-
         signals = []
 
+
         for alert in alerts:
+            signal_type = alert.get("signal_type") or alert.get("type")
+            if not signal_type:
+                logger.debug(f"⛔️ Пропуск алерта без типа: {symbol} {tf}")
+                continue
             try:
                 symbol = alert["symbol"]
                 tf = alert["timeframe"]
-                price = alert["price"]
-                signal_type = alert["signal_type"]
-
-                candles = all_candles.get((symbol, tf))
-                if not candles or len(candles) < 50:
-                    logger.debug(f"📉 Недостаточно свечей для {symbol} {tf}")
+                if (candles := all_candles.get((symbol, tf))) is None or len(candles) < 50:
                     continue
 
                 df = pd.DataFrame(candles)
                 df["close"] = pd.to_numeric(df["close"])
-                df["high"] = pd.to_numeric(df["high"])
-                df["low"] = pd.to_numeric(df["low"])
+                close_price = df["close"].iloc[-1]
 
-                rsi = self._rsi(df["close"])
-                macd_line, macd_signal = self._macd(df["close"])
-                ema20 = df["close"].ewm(span=20).mean()
-                ema50 = df["close"].ewm(span=50).mean()
-                ema200 = df["close"].ewm(span=200).mean()
-                bb_mid = df["close"].rolling(20).mean()
-                bb_std = df["close"].rolling(20).std()
-                bb_upper = bb_mid + 2 * bb_std
-                bb_lower = bb_mid - 2 * bb_std
+                # ── все индикаторы из БД ───────────────────────────────────────
+                db_ind = self.db.get_indicators(symbol, tf)
+                get = lambda k: float(db_ind[k]) if db_ind.get(k) is not None else None
 
-                last = df.iloc[-1]
-                close = last["close"]
-                rsi_val = rsi.iloc[-1]
-                macd_val = macd_line.iloc[-1]
-                macd_sig = macd_signal.iloc[-1]
-                ema20_val = ema20.iloc[-1]
-                ema50_val = ema50.iloc[-1]
-                ema200_val = ema200.iloc[-1]
-                bb_up = bb_upper.iloc[-1]
-                bb_low = bb_lower.iloc[-1]
-                bb_mid_val = bb_mid.iloc[-1]
+                indicators = {
+                    "rsi": get("RSI"),
+                    "macd": get("MACD"),
+                    "macd_hist": get("MACD"),
+                    "ema50": get("EMA50"),
+                    "ema200": get("EMA200"),
+                    "bb_upper": get("BB_UPPER"),
+                    "bb_lower": get("BB_LOWER"),
+                    "stoch_k": get("STOCH_K"),
+                    "stoch_d": get("STOCH_D"),
+                    "atr": get("ATR"),
+                    "adx": get("ADX"),
+                    "vwap": get("VWAP"),
+                    "poc": get("POC"),
+                }
 
+                # ── оценка сигнала ─────────────────────────────────────────────
                 trend_data = self.db.get_trend(symbol)
                 fibo = self.fibo.calculate_for_pair(symbol, tf)
                 levels = [lvl for lvl in all_levels if lvl["symbol"] == symbol and lvl["timeframe"] == tf]
+                market_cap_data = self.db.get_market_cap()
 
-                is_bull_trend = trend_data.get("direction", "").lower() == "bullish"
-                is_above_ema200 = close > ema200_val
+                def calculate_bb_position(price, upper, lower):
+                    """Возвращает позицию цены внутри полос Боллинджера от 0 до 1"""
+                    if upper is None or lower is None or upper == lower:
+                        return None
+                    return (price - lower) / (upper - lower)
 
-                near_support = any(
-                    abs(close - float(lvl["price"])) / close < 0.01 and lvl["type"] == "support" for lvl in levels)
-                near_resistance = any(
-                    abs(close - float(lvl["price"])) / close < 0.01 and lvl["type"] == "resistance" for lvl in levels)
-                in_fibo_zone = fibo and any(
-                    abs(close - lvl_val) / close < 0.01 for lvl_val in fibo["fibo_levels"].values())
+                bb_pos = calculate_bb_position(close_price, indicators["bb_upper"], indicators["bb_lower"])
 
-                # Индикаторы для передачи
-                indicators = {
-                    "RSI": rsi_val,
-                    "MACD": macd_val,
-                    "MACD_SIGNAL": macd_sig,
-                    "EMA20": ema20_val,
-                    "EMA50": ema50_val,
-                    "EMA200": ema200_val,
-                    "BB_UPPER": bb_up,
-                    "BB_LOWER": bb_low,
-                    "BB_MID": bb_mid_val,
-                }
-
-                signal_data = {
+                signal_meta = {
                     "symbol": symbol,
                     "timeframe": tf,
                     "signal_type": signal_type,
-                    "price": price,
-                    "current_price": close
+                    "price": alert.get("price"),
+                    "current_price": close_price,
+                    "rsi": indicators["rsi"],
+                    "macd": indicators["macd"],
+                    "ema50": indicators["ema50"],
+                    "ema200": indicators["ema200"],
+                    "bb_position": bb_pos,
+                    "stoch_k": indicators["stoch_k"],
+                    "stoch_d": indicators["stoch_d"],
+                    "atr": indicators["atr"],
+                    "adx": indicators["adx"],
+                    "vwap": indicators["vwap"],
+                    "poc": indicators["poc"],
                 }
-
-                market_cap_data = self.db.get_market_cap()
 
                 result = self.scorer.evaluate(
                     trend_data,
@@ -2713,50 +3146,61 @@ class SignalEngine:
                     indicators,
                     fibo["fibo_levels"] if fibo else {},
                     market_cap_data,
-                    signal_data
+                    signal_meta
                 )
 
-                long_conditions = (
-                        signal_type == "long"
-                        and close > ema20_val
-                        and rsi_val > 50
-                        and macd_val > macd_sig
-                        and close > bb_mid_val
-                        and is_bull_trend
-                        and is_above_ema200
-                        and near_support
-                )
+                # ── формируем подробности ──────────────────────────────────────
+                det = [
+                    f"Индикатор: Текущая цена: {close_price:.6f}",
+                    f"Индикатор: RSI: {indicators['rsi']:.2f}" if indicators["rsi"] is not None else None,
+                    f"Индикатор: MACD гист.: {indicators['macd_hist']:.6f}" if indicators["macd_hist"] is not None else None,
+                    f"Индикатор: EMA-50: {indicators['ema50']:.6f}" if indicators["ema50"] is not None else None,
+                    f"Индикатор: EMA-200: {indicators['ema200']:.6f}" if indicators["ema200"] is not None else None,
+                    (
+                        f"Индикатор: Bollinger Bands: верх {indicators['bb_upper']:.6f}, "
+                        f"низ {indicators['bb_lower']:.6f}"
+                    ) if indicators["bb_upper"] is not None and indicators["bb_lower"] is not None else None,
+                    (
+                        f"Индикатор: Stochastic %K={indicators['stoch_k']:.2f}, "
+                        f"%D={indicators['stoch_d']:.2f}"
+                    ) if indicators["stoch_k"] is not None and indicators["stoch_d"] is not None else None,
+                ]
+                # убираем None и добавляем детали из Scorer
+                details = [d for d in det if d] + result["details"]
 
-                short_conditions = (
-                        signal_type == "short"
-                        and close < ema20_val
-                        and rsi_val < 50
-                        and macd_val < macd_sig
-                        and close < bb_mid_val
-                        and not is_bull_trend
-                        and close < ema200_val
-                        and near_resistance
-                )
-
-                if (long_conditions or short_conditions) and result["score"] >= 30:
-                    logger.info(f"✅ {symbol} {tf} → {result['recommendation']} | {result['score']} баллов")
-                    signals.append({
-                        "symbol": symbol,
-                        "timeframe": tf,
-                        "signal_type": signal_type,
-                        "current_price": close,
-                        "recommendation": result["recommendation"],
-                        "score": result["score"],
-                        "created_at": alert.get("created_at"),
-                        "details": result["details"]
-                    })
-                else:
-                    logger.debug(f"🚫 {symbol} {tf} отклонён (score={result['score']})")
+                # ── добавляем сигнал в список ──────────────────────────────────
+                signals.append({
+                    "symbol": symbol,
+                    "timeframe": tf,
+                    "signal_type":    signal_type,
+                    "current_price": close_price,
+                    "recommendation": result["recommendation"],
+                    "score": result["score"],
+                    "created_at": alert.get("created_at"),
+                    "details": "\n".join(details),
+                    "rsi": indicators["rsi"],
+                    "macd": indicators["macd_hist"],
+                    "ema50": indicators["ema50"],
+                    "ema200": indicators["ema200"],
+                    "bb_position": None,  # при желании можно посчитать
+                    "stoch_k": indicators["stoch_k"],
+                    "stoch_d": indicators["stoch_d"],
+                })
 
             except Exception as e:
                 logger.error(f"❌ Ошибка при анализе {alert.get('symbol')} {alert.get('timeframe')}: {e}", exc_info=True)
 
+        # ── сохранение ─────────────────────────────────────────────────────────
         if signals:
+            # ── dedup по ключу (symbol, timeframe, signal_type) ───────────────
+            deduped: dict[tuple, dict] = {}
+            for sig in signals:
+                key = (sig["symbol"], sig["timeframe"], sig["signal_type"])
+                # если встречается повтор, оставляем тот, у которого score выше
+                if key not in deduped or sig["score"] > deduped[key]["score"]:
+                    deduped[key] = sig
+
+            signals = list(deduped.values())
             self.db.save_signals(signals)
             logger.info(f"✅ Всего сигналов сохранено: {len(signals)}")
         else:
@@ -2764,26 +3208,7 @@ class SignalEngine:
 
         return signals
 
-    def _rsi(self, series, period=14):
-        delta = series.diff()
-        gain = delta.where(delta > 0, 0)
-        loss = -delta.where(delta < 0, 0)
-        avg_gain = gain.rolling(window=period).mean()
-        avg_loss = loss.rolling(window=period).mean()
-        rs = avg_gain / avg_loss
-        return 100 - (100 / (1 + rs))
 
-    def _macd(self, series, fast=12, slow=26, signal=9):
-        ema_fast = series.ewm(span=fast, adjust=False).mean()
-        ema_slow = series.ewm(span=slow, adjust=False).mean()
-        macd_line = ema_fast - ema_slow
-        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-        return macd_line, signal_line
-
-
-
-
-# services/signal_score.py
 
 # services/signal_score.py
 
@@ -2795,98 +3220,246 @@ class SignalScorer:
     def __init__(self):
         pass
 
-    def evaluate(self, trend_data, levels, indicators, fibo_levels, market_cap_data, signal):
-        score = 0
-        details = []
+    def evaluate(
+            self,
+            trend_data: dict | None,
+            levels: list[dict],
+            indicators: dict,
+            fibo_levels: list[dict] | dict,
+            market_cap_data: dict | None,
+            signal: dict,
+    ) -> dict:
+        def to_float(x):
+            """Пытается превратить значение в float, иначе возвращает None."""
+            try:
+                return float(x)
+            except (TypeError, ValueError):
+                return None
 
-        # --- Trend Weight ---
+        rsi = to_float(indicators.get("rsi"))
+        macd_h = to_float(indicators.get("macd_hist"))
+        ema50 = to_float(indicators.get("ema50"))
+        ema200 = to_float(indicators.get("ema200"))
+        """
+        Рассчитывает итоговый score и формирует текстовые детали по сигналу.
+        Возвращает: {"score": int, "recommendation": str, "details": list[str]}
+        """
+        score = 0
+        details: list[str] = []
+
+        symbol = signal["symbol"]
+        timeframe = signal["timeframe"]
+        signal_type = signal["signal_type"]
+
+        atr = indicators.get("atr")
+        adx = indicators.get("adx")
+        supertrend = indicators.get("supertrend")
+        oi = indicators.get("oi")
+        fund_rate = indicators.get("fund_rate")
+        vwap = indicators.get("vwap")
+        poc = indicators.get("vpvr_poc")
+        sentiment = indicators.get("longs_ratio")  # или другой ключ
+
+        # ── безопасно получаем цену ───────────────────────────────────────────
+        try:
+            price = float(signal.get("price") or signal["current_price"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError(
+                f"Не удалось определить цену для {symbol} {timeframe} ({signal_type})"
+            )
+
+        current_price = float(signal["current_price"])
+
+        # ── вспомогательные форматтеры ────────────────────────────────────────
+        fmt_pct = lambda v: f"{v:+.2f}%"
+        fmt_dir = lambda d: "выше уровня" if d > 0 else "ниже уровня"
+
+        # ── 1. Тренд ──────────────────────────────────────────────────────────
         if trend_data:
-            direction = trend_data.get("direction")
-            if direction and signal["signal_type"] == "long" and direction.upper() == "BULLISH":
+            direction = trend_data.get("direction", "").upper()
+            if direction == "BULLISH" and signal_type == "long":
                 score += 20
                 details.append("✅ Тренд: BULLISH")
-            elif direction and signal["signal_type"] == "short" and direction.upper() == "BEARISH":
+            elif direction == "BEARISH" and signal_type == "short":
                 score += 20
                 details.append("✅ Тренд: BEARISH")
-            else:
+            elif direction:
                 details.append(f"⚠️ Тренд: {direction}")
 
-        # --- Level Proximity ---
-        for level in levels:
-            if level["symbol"] != signal["symbol"] or level["timeframe"] != signal["timeframe"]:
+        # ── 2. Близость к уровням S/R ─────────────────────────────────────────
+        for lvl in levels:
+            if lvl["symbol"] != symbol or lvl["timeframe"] != timeframe:
                 continue
-
-            diff = abs(float(level["price"]) - float(signal["price"]))
-            if diff < 0.005 * float(signal["price"]):
+            delta = (current_price - float(lvl["price"])) / current_price * 100
+            if abs(delta) < 0.5:  # ±0.5 %
                 score += 15
-                details.append(f"📈 Близко к уровню ({level['type']})")
+                details.append(
+                    f"📈 {lvl['type'].capitalize()}: {lvl['price']:.6f} | "
+                    f"Цена {fmt_dir(delta)} на {fmt_pct(delta)}"
+                )
 
-        # --- Indicators Check ---
-        if indicators:
-            for key, val in indicators.items():
-                if isinstance(val, (int, float)):
+            # ── 3. Фибоначчи ─────────────────────────────────────────────────────
+            if isinstance(fibo_levels, dict):
+                # формат {"0.236": 108132.90, ...}
+                for level_name, price_val in fibo_levels.items():
                     try:
-                        val = float(val)
-                        if key in ["RSI", "Stochastic"]:
-                            if signal["signal_type"] == "long" and val < 30:
-                                score += 10
-                                details.append(f"🟢 Индикатор {key} перепродан ({val:.2f})")
-                            elif signal["signal_type"] == "short" and val > 70:
-                                score += 10
-                                details.append(f"🔴 Индикатор {key} перекуплен ({val:.2f})")
-                        if key.startswith("EMA") and "price" in signal:
-                            if signal["signal_type"] == "long" and val < signal["price"]:
-                                score += 5
-                                details.append(f"EMA {key} ниже цены")
-                            elif signal["signal_type"] == "short" and val > signal["price"]:
-                                score += 5
-                                details.append(f"EMA {key} выше цены")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Не удалось обработать индикатор {key}: {e}")
+                        price_val = float(price_val)
+                    except (TypeError, ValueError):
+                        continue
+                    delta = (current_price - price_val) / current_price * 100
+                    if abs(delta) < 0.8:  # ±0.8 %
+                        score += 10
+                        details.append(
+                            f"🔢 Фибоначчи {level_name}: {price_val:.6f} | "
+                            f"Цена {fmt_dir(delta)} на {fmt_pct(delta)}"
+                        )
+            else:
+                # формат [{"symbol": ..., "timeframe": ..., "level": ..., "price": ...}, ...]
+                for fl in fibo_levels or []:
+                    if fl.get("symbol") != symbol or fl.get("timeframe") != timeframe:
+                        continue
+                    try:
+                        price_val = float(fl["price"])
+                    except (TypeError, ValueError, KeyError):
+                        continue
+                    delta = (current_price - price_val) / current_price * 100
+                    if abs(delta) < 0.8:
+                        score += 10
+                        details.append(
+                            f"🔢 Фибоначчи {fl['level']}: {price_val:.6f} | "
+                            f"Цена {fmt_dir(delta)} на {fmt_pct(delta)}"
+                        )
 
-        # --- Fibonacci Levels ---
-        if fibo_levels:
-            for name, level_val in fibo_levels.items():
-                diff = abs(float(level_val) - float(signal["price"]))
-                if diff < 0.005 * float(signal["price"]):
-                    score += 10
-                    details.append(f"📐 Фибо уровень {name} рядом")
+        # ── 4. RSI / MACD / EMA / Stochastic / Bollinger ─────────────────────
 
-        # --- Market Cap Trend ---
-        if market_cap_data:
-            try:
-                diffs = [curr[0] - prev[0] for prev, curr in zip(market_cap_data, market_cap_data[1:])]
-                growth = sum(d for d in diffs if d > 0)
-                decline = abs(sum(d for d in diffs if d < 0))
-                if signal["signal_type"] == "long" and growth > decline:
-                    score += 5
-                    details.append("📊 Рост капитализации")
-                elif signal["signal_type"] == "short" and decline > growth:
-                    score += 5
-                    details.append("📉 Падение капитализации")
-            except Exception as e:
-                logger.warning(f"⚠️ Ошибка при анализе капитализации: {e}")
+        if rsi is not None:
+            if (signal_type == "long" and rsi < 30) or (signal_type == "short" and rsi > 70):
+                score += 10
+                details.append(f"🎯 RSI: {rsi:.1f} (сильный сигнал)")
+            else:
+                details.append(f"ℹ️ RSI: {rsi:.1f}")
 
-        # --- Итог ---
-        recommendation = "ПОКУПАТЬ" if signal["signal_type"] == "long" else "ПРОДАВАТЬ"
+        macd_h = indicators.get("macd_hist")
+        if macd_h is not None:
+            if (signal_type == "long" and macd_h > 0) or (signal_type == "short" and macd_h < 0):
+                score += 8
+                details.append(f"🎯 MACD гистограмма: {macd_h:+.6f}")
+            else:
+                details.append(f"ℹ️ MACD гистограмма: {macd_h:+.6f}")
+
+            # ── ATR: дальность стопа / тейка ───────────────────────
+            atr = indicators.get("atr")
+            if atr is not None:
+                r_multiple = abs(current_price - price) / atr
+                details.append(f"ℹ️ ATR: {atr:.6f}  |  {r_multiple:.1f} R до уровня")
+
+            # ── Open Interest & Funding ────────────────────────────
+            oi = indicators.get("oi")
+            fnd = indicators.get("fund_rate")
+            if oi is not None:
+                details.append(f"ℹ️ Open Interest: {float(oi):,.0f}")
+            if fnd is not None and abs(float(fnd)) > 0.0004:
+                score += 4
+                details.append(f"💸 Funding rate: {float(fnd):.4%}")
+
+            # ── ADX / SuperTrend  __________________________________
+            adx = indicators.get("adx")
+            st = indicators.get("supertrend")
+            if adx is not None and adx > 25:
+                score += 5
+                details.append(f"✅ ADX {adx:.1f} (сильный тренд)")
+            if st is not None and ((st and signal_type == "long") or (not st and signal_type == "short")):
+                score += 6
+                details.append("✅ SuperTrend в ту же сторону")
+
+            # --- VWAP: сравнение с ценой ---
+            vwap = signal.get("vwap")
+            price = signal.get("current_price")
+            if vwap and price:
+                diff = price - vwap
+                pct = 100 * diff / vwap
+                side = "выше" if diff > 0 else "ниже"
+                details.append(f"📉 VWAP: {vwap:.6f} | Цена {side} на {pct:+.2f}%")
+
+            # --- POC: point of control ---
+            poc = signal.get("poc")
+            if poc and price:
+                diff = price - poc
+                pct = 100 * diff / poc
+                side = "выше" if diff > 0 else "ниже"
+                details.append(f"📍 POC: {poc:.6f} | Цена {side} на {pct:+.2f}%")
+
+
+        # EMA-50 / EMA-200
+        for ema_key, pts in [("ema50", 5), ("ema200", 5)]:
+            ema_val = indicators.get(ema_key)
+            if ema_val is None:
+                continue
+            delta = (current_price - ema_val) / current_price * 100
+            if (signal_type == "long" and delta > 0) or (signal_type == "short" and delta < 0):
+                score += pts
+            details.append(
+                f"ℹ️ {ema_key.upper()}: {ema_val:.6f} | "
+                f"Цена {fmt_dir(delta)} на {fmt_pct(delta)}"
+            )
+
+        # Stochastic
+        if indicators.get("stoch_k") is not None and indicators.get("stoch_d") is not None:
+            st_k = indicators["stoch_k"]
+            st_d = indicators["stoch_d"]
+            if (signal_type == "long" and st_k < 20 and st_d < 20) or (
+                    signal_type == "short" and st_k > 80 and st_d > 80
+            ):
+                score += 6
+                details.append(f"🎯 Stochastic %K={st_k:.1f} %D={st_d:.1f}")
+            else:
+                details.append(f"ℹ️ Stochastic %K={st_k:.1f} %D={st_d:.1f}")
+
+        # Bollinger Bands
+        if indicators.get("bb_upper") and indicators.get("bb_lower"):
+            bb_up = indicators["bb_upper"]
+            bb_lo = indicators["bb_lower"]
+            band_pct = (current_price - bb_lo) / (bb_up - bb_lo) * 100
+            details.append(f"ℹ️ Bollinger Bands позиция: {band_pct:.1f}%")
+
+            # ── 5. Рыночная капитализация ───────────────────────────────────────
+            cap_change = None
+            if market_cap_data:
+                if isinstance(market_cap_data, dict):
+                    cap_change = market_cap_data.get("percent_change_24h")
+                elif isinstance(market_cap_data, list) and market_cap_data:
+                    # берём первую запись или среднее — зависит от вашей логики
+                    first = market_cap_data[0]
+                    if isinstance(first, dict):
+                        cap_change = first.get("percent_change_24h")
+
+            if cap_change is not None:
+                try:
+                    cap_change = float(cap_change)
+                except (TypeError, ValueError):
+                    cap_change = None
+
+            if cap_change is not None and abs(cap_change) > 2:
+                score += 3
+                details.append(f"💰 Капитализация 24 ч: {fmt_pct(cap_change)}")
+
+        # ── финальная рекомендация ───────────────────────────────────────────
+        recommendation = (
+            "Сильный сигнал" if score >= 40 else
+            "Умеренный сигнал" if score >= 25 else
+            "Слабый сигнал"
+        )
 
         return {
-            "symbol": signal["symbol"],
-            "timeframe": signal["timeframe"],
-            "signal_type": signal["signal_type"],
-            "price": signal["price"],
-            "current_price": signal["current_price"],
-            "recommendation": recommendation,
             "score": score,
-            "details": "; ".join(details)
+            "recommendation": recommendation,
+            "details": details,
         }
 
 
 
-
 # services/trend_engine.py
 
-# services/trend_engine.py
 import pandas as pd
 from datetime import datetime
 from database.database import DatabaseManager
@@ -2924,19 +3497,20 @@ class TrendAnalyzer:
 
 
 
-
-# services/worker.py
-
 # services/worker.py
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+EXCLUDED_STABLES = {"USDC", "BUSD", "TUSD", "PAX", "USDP", "DAI", "FDUSD", "EUR", "UST", "USDD", "SUSD", "USDT", "XUSD"}
+
 from database.database import DatabaseManager
 from services.signal_score import SignalScorer
 from services.fibo_engine import FiboEngine
 from services.signal_engine import SignalEngine
 
 logger = logging.getLogger(__name__)
+
 
 class SignalWorker:
     def __init__(self):
@@ -2945,23 +3519,50 @@ class SignalWorker:
         self.fibo = FiboEngine()
         self.signal_engine = SignalEngine()
 
+
+    # ---------- public -----------------------------------------------------
+
     def process_all_pairs(self):
         logger.info("⚙️ Обработка всех пар для генерации сигналов")
         pairs = self.db.get_symbols_from_cache()
+
+        pairs = [s for s in pairs if not any(stable in s for stable in EXCLUDED_STABLES)]
         timeframes = ["1d", "4h", "1h", "15m"]
         tasks = [(symbol, tf) for symbol in pairs for tf in timeframes]
 
         results = []
 
-        with ThreadPoolExecutor(max_workers=12) as executor:
-            futures = {executor.submit(self.analyze_pair, symbol, tf): (symbol, tf) for symbol, tf in tasks}
+        trend_cache = {t["symbol"]: t for t in self.db.get_all_trends()}
+        levels_cache = self.db.get_levels()
+        market_cap_data = self.db.get_market_cap()
+
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = {
+                executor.submit(
+                    self.analyze_pair,
+                    symbol,
+                    tf,
+                    trend_cache,
+                    levels_cache,
+                    market_cap_data,
+                ): (symbol, tf)
+                for symbol, tf in tasks
+            }
+
             for future in as_completed(futures):
                 result = future.result()
                 if result:
                     results.append(result)
 
-        # Плоский список всех сигналов (так как каждый result может быть списком)
-        flat_results = [r for sub in results if isinstance(sub, list) for r in sub]
+        # результирующий плоский список
+        flat_results = [
+            item
+            for sub in results
+            if isinstance(sub, list)
+            for item in sub
+            if isinstance(item, dict)
+            and {"symbol", "timeframe", "signal_type"} <= item.keys()
+        ]
 
         if flat_results:
             self.db.save_signals(flat_results)
@@ -2971,28 +3572,76 @@ class SignalWorker:
 
         return flat_results
 
-    def analyze_pair(self, symbol, timeframe):
+    # ---------- private ----------------------------------------------------
+
+    def analyze_pair(
+        self,
+        symbol: str,
+        timeframe: str,
+        trend_cache: dict,
+        levels_cache: list,
+        market_cap_data: dict,
+    ):
+        start = time.time()
+
+        # ── индикаторы ────────────────────────────────────────────────────
+        raw = self.db.get_indicators(symbol, timeframe)
+
+        def _as_float(val):
+            """Вернёт float, если значение похоже на число; иначе None."""
+            if val in (None, ""):
+                return None
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return None
+
+        indicators = {k.lower(): _as_float(v) for k, v in raw.items()}
+
         try:
             candles = self.db.get_candles(symbol, timeframe)
             if not candles or len(candles) < 30:
                 return None
 
             current_price = candles[-1]["close"]
-            trend_data = self.db.get_trend(symbol)
-            levels = [lvl for lvl in self.db.get_levels() if lvl["symbol"] == symbol and lvl["timeframe"] == timeframe]
-            indicators = self.db.get_indicators(symbol, timeframe)
+            trend_data = trend_cache.get(symbol, {})
+            levels = [
+                lvl
+                for lvl in levels_cache
+                if lvl["symbol"] == symbol and lvl["timeframe"] == timeframe
+            ]
             fibo = self.fibo.calculate_for_pair(symbol, timeframe)
-            market_cap_data = self.db.get_market_cap()
 
-            # Попробуем оценить обе стороны — long и short
             results = []
-            for signal_type in ["long", "short"]:
+
+            # --- PATCH BEGIN -----------------------------------------------------------
+            # соберём общие для любого типа сигнала данные
+            base_payload = {
+                "SYMBOL": symbol,  # <= оставьте как нужно БД
+                "TIMEFRAME": timeframe,
+                "PRICE": current_price,
+                "CURRENT_PRICE": current_price,
+
+                # индикаторы –  в том регистре, как названы колонки signals
+                "RSI": indicators.get("rsi"),
+                "MACD": indicators.get("macd_hist"),
+                "STOCH_K": indicators.get("stoch_k"),
+                "STOCH_D": indicators.get("stoch_d"),
+                "ATR": indicators.get("atr"),
+                "ADX": indicators.get("adx"),
+                "OI": indicators.get("oi"),
+                "FUND_RATE": indicators.get("fund_rate"),
+                "SUPERTREND": indicators.get("supertrend"),
+                "VWAP": indicators.get("vwap"),
+                "POC": indicators.get("vpvr_poc"),
+            }
+            for signal_type in ("long", "short"):
                 signal = {
                     "symbol": symbol,
                     "timeframe": timeframe,
                     "signal_type": signal_type,
                     "price": current_price,
-                    "current_price": current_price
+                    "current_price": current_price,
                 }
 
                 result = self.scorer.evaluate(
@@ -3001,23 +3650,24 @@ class SignalWorker:
                     indicators,
                     fibo["fibo_levels"] if fibo else {},
                     market_cap_data,
-                    signal
+                    signal,
                 )
 
                 if result and result["score"] >= 30:
-                    logger.info(f"✅ {symbol} {timeframe} {signal_type} → {result['score']} баллов")
+                    # 👉 приводим details к строке с переводами строк
+                    if isinstance(result["details"], (list, set, tuple)):
+                        result["details"] = "\n".join(result["details"])
+
+                    # мёрджим payload → гарантируем, что в БД уйдут все колонки
+                    result |= base_payload | {"SIGNAL_TYPE": signal_type}
+
                     results.append(result)
 
             return results if results else None
 
-        except Exception as e:
-            logger.error(f"❌ Ошибка при анализе {symbol} {timeframe}: {e}", exc_info=True)
-            return None
-
-
-
-
-
+        finally:
+            duration = time.time() - start
+            logger.debug(f"⏱ {symbol} {timeframe} анализ за {duration:.2f} сек")
 
 
 

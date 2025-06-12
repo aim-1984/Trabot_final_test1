@@ -3,6 +3,7 @@ from datetime import datetime
 
 from database.database import DatabaseManager
 
+EXCLUDED_STABLES = {"USDC", "BUSD", "TUSD", "PAX", "USDP", "DAI", "FDUSD", "EUR", "UST", "USDD", "SUSD", "XUSD"}
 logger = logging.getLogger(__name__)
 
 
@@ -21,6 +22,10 @@ class AlertSystem:
             symbol = lvl["symbol"]
             timeframe = lvl["timeframe"]
             price_level = float(lvl["price"])
+
+            # Исключаем стейблкоины
+            if any(stable in symbol for stable in EXCLUDED_STABLES):
+                continue
 
             current_price = self.db.get_current_price(symbol, timeframe)
             if current_price is None:

@@ -1,5 +1,3 @@
-# services/deep_an.py
-
 import aiohttp
 import logging
 from datetime import datetime, timedelta
@@ -76,4 +74,3 @@ class MarketCapTracker:
             return []
         finally:
             self.db.releas
-

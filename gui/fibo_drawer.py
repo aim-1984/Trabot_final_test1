@@ -1,4 +1,3 @@
-# gui/fibo_drawer.py
 import logging
 import pandas as pd
 import mplfinance as mpf
@@ -50,4 +49,3 @@ class FiboDrawer:
                 )
         except Exception as e:
             logger.error(f"❌ Ошибка подписей Фибоначчи: {e}")
-

@@ -1,4 +1,3 @@
-# gui/app.py
 import tkinter as tk
 from tkinter import ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -8,7 +7,9 @@ from gui.indicators_drawer import IndicatorDrawer
 from gui.tables_drawer import TableDrawer
 from database.database import DatabaseManager
 import logging
+from gui.predictor_UI import PredictorUI
 logger = logging.getLogger(__name__)
+
 
 
 def create_main_window():
@@ -31,6 +32,8 @@ def create_main_window():
 
     chart_drawer = ChartDrawer()
     tables = TableDrawer(root)
+
+    predictor_ui = PredictorUI(root)
 
     symbol_var = tk.StringVar()
     tf_var = tk.StringVar()
@@ -64,6 +67,7 @@ def create_main_window():
     ttk.Button(control_frame, text="Обновить график", command=lambda: update_chart()).pack(side=tk.LEFT, padx=10)
     ttk.Button(control_frame, text="Перезапустить анализ", command=run_analysis).pack(side=tk.LEFT, padx=10)
     ttk.Button(control_frame, text="Сигналы", command=lambda: tables.draw_signals_table(on_select=handle_select)).pack(side=tk.LEFT)
+    ttk.Button(control_frame, text="Прогноз", command=predictor_ui.show_forecast_table).pack(side=tk.LEFT)
     ttk.Button(control_frame, text="Алерты", command=lambda: tables.draw_alerts_table(on_select=handle_select)).pack(side=tk.LEFT)
     ttk.Button(control_frame, text="Очистить базу", command=lambda: db.truncate_all_tables() or update_chart()).pack(side=tk.RIGHT, padx=5)
 
@@ -125,4 +129,3 @@ def create_main_window():
     tf_combo.bind("<<ComboboxSelected>>", lambda e: update_chart())
 
     return root
-

@@ -1,4 +1,3 @@
-# database/database.py
 import os
 import logging
 import psycopg2
@@ -10,15 +9,28 @@ import numpy as np
 from datetime import datetime
 import time
 import re
+MAX_CONN = 50
 
 from config.constants import DB_CONFIG  # теперь так
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+
 class DatabaseManager:
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __init__(self):
-        logger.debug("🔌 Инициализация DatabaseManager")
+        if hasattr(self, "_initialized"):
+            return
+        self._initialized = True
+
         self.db_config = {
             'dbname': os.getenv('DB_NAME', 'postgres'),
             'user': os.getenv('DB_USER', 'postgres'),
@@ -26,13 +38,22 @@ class DatabaseManager:
             'host': os.getenv('DB_HOST', 'localhost'),
             'port': os.getenv('DB_PORT', '5432')
         }
-        # Создаем пул соединений ДО создания таблиц
+
         self.connection_pool = psycopg2.pool.ThreadedConnectionPool(
-            minconn=5,
-            maxconn=20,
+            minconn=10,
+            maxconn=30,
             **self.db_config
         )
+
         logger.debug("✅ Успешное подключение к БД")
+
+    @classmethod
+    def init_schema_once(cls):
+        instance = cls()
+        instance._create_tables()
+        instance._create_indexes()
+        logger.info("✅ База инициализирована один раз")
+        return instance
         # Теперь можно безопасно создавать таблицы
         self._create_tables()
         self._create_indexes()
@@ -164,10 +185,22 @@ class DatabaseManager:
             """,
             """
             ALTER TABLE signals
-            ADD COLUMN IF NOT EXISTS score INT,          
+            ADD COLUMN IF NOT EXISTS score INT,
             ADD COLUMN IF NOT EXISTS details TEXT,
             ADD COLUMN IF NOT EXISTS recommendation VARCHAR(50),
-            ADD COLUMN IF NOT EXISTS current_price DECIMAL(20,8);
+            ADD COLUMN IF NOT EXISTS current_price DECIMAL(20,8),
+            ADD COLUMN IF NOT EXISTS rsi DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS macd DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS ema50 DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS ema200 DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS bb_position DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS stoch_k DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS stoch_d DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS atr DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS adx DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS vwap DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS poc DOUBLE PRECISION;
+
             """,
         ]
 
@@ -202,6 +235,7 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_levels_symbol_timeframe ON levels (symbol, timeframe);",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_unique ON signals (symbol, timeframe, signal_type, time);"
             "CREATE INDEX IF NOT EXISTS idx_levels_price ON levels (price);"
+            "CREATE INDEX IF NOT EXISTS idx_indicators_sym_tf ON indicators(symbol, timeframe);"
         ]
         conn = self.get_connection()
         try:
@@ -322,7 +356,7 @@ class DatabaseManager:
         try:
             with conn.cursor() as cur:
                 # Очищаем 1d старше 3 месяцев
-                cur.execute(""" 
+                cur.execute("""
                     UPDATE collected_candles
                     SET candles = COALESCE((
                         SELECT jsonb_agg(c)
@@ -333,7 +367,7 @@ class DatabaseManager:
                 """)
 
                 # Очищаем 4h и 1h старше 1 месяца
-                cur.execute(""" 
+                cur.execute("""
                     UPDATE collected_candles
                     SET candles = COALESCE((
                         SELECT jsonb_agg(c)
@@ -344,7 +378,7 @@ class DatabaseManager:
                 """)
 
                 # Очищаем 15m старше 2 недель
-                cur.execute(""" 
+                cur.execute("""
                     UPDATE collected_candles
                     SET candles = COALESCE((
                         SELECT jsonb_agg(c)
@@ -440,6 +474,22 @@ class DatabaseManager:
         finally:
             self.release_connection(conn)
 
+    def get_all_trends(self):
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT symbol, direction, ema50, ema200 FROM trend_cache")
+                rows = cur.fetchall()
+                return [
+                    {"symbol": row[0], "direction": row[1], "ema50": float(row[2]), "ema200": float(row[3])}
+                    for row in rows
+                ]
+        except Exception as e:
+            logger.error(f"Ошибка получения всех трендов: {e}")
+            return []
+        finally:
+            self.release_connection(conn)
+
     def get_trend(self, symbol: str):
         conn = self.get_connection()
         try:
@@ -473,7 +523,7 @@ class DatabaseManager:
                 # Используем UPSERT для обновления или вставки
                 insert_query = """
                                INSERT INTO trend_cache (symbol, direction, ema50, ema200, last_updated)
-                               VALUES (%s, %s, %s, %s, TO_TIMESTAMP(%s)) ON CONFLICT (symbol) 
+                               VALUES (%s, %s, %s, %s, TO_TIMESTAMP(%s)) ON CONFLICT (symbol)
                     DO \
                                UPDATE SET
                                    direction = EXCLUDED.direction, \
@@ -556,32 +606,56 @@ class DatabaseManager:
         query = """
         INSERT INTO signals (
             symbol, timeframe, signal_type, price,
-            recommendation, score, details, current_price, time
+            recommendation, score, details, current_price, time,
+            rsi, macd, ema50, ema200, bb_position, stoch_k, stoch_d,
+            atr, adx, vwap, poc
         )
         VALUES %s
         ON CONFLICT (symbol, timeframe, signal_type, time) DO UPDATE
         SET current_price = EXCLUDED.current_price,
             recommendation = EXCLUDED.recommendation,
             score = EXCLUDED.score,
-            details = EXCLUDED.details
+            details = EXCLUDED.details,
+            rsi = EXCLUDED.rsi,
+            macd = EXCLUDED.macd,
+            ema50 = EXCLUDED.ema50,
+            ema200 = EXCLUDED.ema200,
+            bb_position = EXCLUDED.bb_position,
+            stoch_k = EXCLUDED.stoch_k,
+            stoch_d = EXCLUDED.stoch_d,
+            atr = EXCLUDED.atr,
+            adx = EXCLUDED.adx,
+            vwap = EXCLUDED.vwap,
+            poc = EXCLUDED.poc
         """
 
-        # Убираем np.float64 → float
         for s in signals:
-            if isinstance(s.get("current_price"), np.generic):
-                s["current_price"] = float(s["current_price"])
+            for key in ["current_price", "rsi", "macd", "ema50", "ema200", "bb_position", "stoch_k", "stoch_d"]:
+                if isinstance(s.get(key), np.generic):
+                    s[key] = float(s[key])
 
         values = [
             (
                 s["symbol"],
                 s["timeframe"],
                 s["signal_type"],
-                s.get("price", s.get("current_price", 0.0)),  # → поле price
+                float(s.get("price", s.get("current_price", 0.0))),
                 s.get("recommendation", ""),
-                s.get("score", 0),
+                int(s.get("score", 0)),
                 s.get("details", ""),
-                s.get("current_price", 0.0),
-                int(time.time() * 1000)
+                float(s.get("current_price", 0.0)),
+                int(time.time() * 1000),
+                s.get("rsi"),
+                s.get("macd"),
+                s.get("ema50"),
+                s.get("ema200"),
+                s.get("bb_position"),
+                s.get("stoch_k"),
+                s.get("stoch_d"),
+                s.get("atr"),
+                s.get("adx"),
+                s.get("vwap"),
+                s.get("poc"),
             )
             for s in signals
         ]
@@ -595,9 +669,11 @@ class DatabaseManager:
         finally:
             self.connection_pool.putconn(conn)
 
+
     def get_signals(self, limit=100):
         query = """
-        SELECT symbol, timeframe, signal_type, current_price, recommendation, score, details, time
+        SELECT symbol, timeframe, signal_type, current_price, recommendation, score,
+               details, time, rsi, macd, ema50, ema200, bb_position, stoch_k, stoch_d
         FROM signals
         ORDER BY time DESC
         LIMIT %s
@@ -620,7 +696,14 @@ class DatabaseManager:
                 "recommendation": row[4],
                 "score": row[5],
                 "details": row[6],
-                "created_at": int(row[7]) // 1000  # UNIX timestamp в секундах
+                "created_at": int(row[7]) // 1000,
+                "rsi": row[8],
+                "macd": row[9],
+                "ema50": row[10],
+                "ema200": row[11],
+                "bb_position": row[12],
+                "stoch_k": row[13],
+                "stoch_d": row[14],
             })
         return result
 
@@ -661,6 +744,27 @@ class DatabaseManager:
         finally:
             self.release_connection(conn)
 
+    def get_fibo_levels(self, symbol, timeframe):
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT level, price
+                    FROM fibo_levels
+                    WHERE symbol = %s AND timeframe = %s
+                    ORDER BY level
+                    """,
+                    (symbol, timeframe),
+                )
+                rows = cur.fetchall()
+                return [{"level": row[0], "price": float(row[1])} for row in rows]
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки уровней фибоначчи: {e}")
+            return []
+        finally:
+            self.release_connection(conn)
+
     def truncate_all_tables(self):
         """Очистка содержимого всех таблиц"""
         logger.info("⏳ Начало очистки таблиц...")
@@ -681,4 +785,3 @@ class DatabaseManager:
             conn.rollback()
         finally:
             self.release_connection(conn)
-

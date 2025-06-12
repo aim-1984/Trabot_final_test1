@@ -1,4 +1,3 @@
-# services/trend_engine.py
 import pandas as pd
 from datetime import datetime
 from database.database import DatabaseManager
@@ -33,4 +32,3 @@ class TrendAnalyzer:
             }
 
         self.db.save_trends(trends)
-

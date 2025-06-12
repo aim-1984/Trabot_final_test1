@@ -1,10 +1,10 @@
-# services/identifier.py
 import aiohttp
 import asyncio
 import logging
 from datetime import datetime
 from database.database import DatabaseManager
 from config.constants import BINANCE_TICKER_URL
+
 
 logger = logging.getLogger(__name__)
 
@@ -49,4 +49,3 @@ class PairIdentifier:
             conn.rollback()
         finally:
             self.db.release_connection(conn)
-

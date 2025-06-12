@@ -1,6 +1,3 @@
-# run_worker.py
-
-
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -29,5 +26,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-

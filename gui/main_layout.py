@@ -1,4 +1,3 @@
-# gui/main_layout.py
 import tkinter as tk
 from tkinter import ttk
 
@@ -66,4 +65,3 @@ class MainLayout:
     def _call_clear_db(self):
         if self.on_clear_db:
             self.on_clear_db()
-

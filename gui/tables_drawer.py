@@ -1,4 +1,3 @@
-# tables_drawer.py
 import tkinter as tk
 from tkinter import ttk, messagebox
 import logging
@@ -9,161 +8,129 @@ logger = logging.getLogger(__name__)
 
 class TableDrawer:
     def __init__(self, master):
+        self.signals_map = {}
         self.master = master
         self.db = DatabaseManager()
 
     def draw_signals_table(self, on_select=None):
-        window = tk.Toplevel(self.master)
-        window.title("Сигналы")
-        window.geometry("1200x600")
+        win = tk.Toplevel(self.master)
+        win.title("Сигналы")
+        win.geometry("1200x600")
 
-        columns = ["symbol", "timeframe", "signal_type", "current_price", "recommendation", "score", "created_at", "details"]
-        tree = ttk.Treeview(window, columns=columns, show="headings")
-        tree.pack(fill=tk.BOTH, expand=True)
+        # ① список колонок (добавлены новые метрики)
+        self.columns = [
+            "symbol", "timeframe", "signal_type", "current_price",
+            "recommendation", "score", "created_at",
+            "rsi", "macd", "stoch_k", "stoch_d",
+            "atr", "adx", "oi", "fund_rate",
+            "supertrend", "vwap", "poc", "sentiment",
+            "details"                                     # оставляем в самом конце
+        ]
 
-        for col in columns:
-            tree.heading(col, text=col.capitalize(), command=lambda c=col: self.sort_by_column(tree, c, False))
-            tree.column(col, anchor="center", width=120)
+        # ② обёртка + scrollbar
+        frame = tk.Frame(win); frame.pack(fill=tk.BOTH, expand=True)
+        xscroll = tk.Scrollbar(frame, orient=tk.HORIZONTAL)
+        xscroll.pack(side=tk.BOTTOM, fill=tk.X)
 
-        self._refresh_signals(tree)
+        # ③ создаём Treeview ДО настройки колонок
+        self.tree = ttk.Treeview(frame,
+                                 columns=self.columns,
+                                 show="headings",
+                                 xscrollcommand=xscroll.set)
+        self.tree.pack(fill=tk.BOTH, expand=True)
+        xscroll.config(command=self.tree.xview)
 
-        ttk.Button(window, text="Обновить", command=lambda: self._refresh_signals(tree)).pack(pady=5)
+        # ④ заголовки / ширины
+        for col in self.columns:
+            self.tree.heading(col, text=col.upper(),
+                              command=lambda c=col: self.sort_by_column(c, False))
+            self.tree.column(col, anchor="w", width=140, stretch=True)
 
+        ttk.Button(win, text="Обновить",
+                   command=self._refresh_signals).pack(pady=5)
+
+        # ⑤ callbacks
         if on_select:
-            def handle_select(event):
-                item = tree.selection()
-                if item:
-                    row_data = tree.item(item[0])["values"]
-                    on_select(row_data)
-            tree.bind("<<TreeviewSelect>>", handle_select)
+            self.tree.bind("<<TreeviewSelect>>",
+                           lambda e: self._handle_select(on_select))
+        self.tree.bind("<Double-1>", self._on_double_click)
 
-        def on_double_click(event):
-            selected = tree.selection()
-            if not selected:
-                return
-            item = tree.item(selected[0], "values")
-            symbol = item[0]
-            timeframe = item[1]
-            details = item[7]  # details = 8-я колонка (0-based index)
-            logger.info(f"📍 Выбран сигнал: {symbol} {timeframe}")
-            messagebox.showinfo(
-                title=f"Детали сигнала: {symbol} ({timeframe})",
-                message=details
-            )
-            if on_select:
-                on_select(symbol, timeframe)
+        self._refresh_signals()   # первая отрисовка
 
-        tree.bind("<Double-1>", on_double_click)
+    # ------------ обновление таблицы -----------------------------
+    def _refresh_signals(self):
+        for row in self.tree.get_children():
+            self.tree.delete(row)
 
-    def _refresh_signals(self, tree):
-        for row in tree.get_children():
-            tree.delete(row)
         try:
-            signals = self.db.get_signals()
-            for row in signals:
-                tree.insert("", "end", values=[
-                    row.get("symbol"),
-                    row.get("timeframe"),
-                    row.get("signal_type"),
-                    float(row.get("current_price", 0)),
-                    row.get("recommendation"),
-                    float(row.get("score", 0)),  # ← ЗДЕСЬ
-                    datetime.fromtimestamp(row.get("created_at")).strftime("%Y-%m-%d %H:%M"),
-                    row.get("details", "")
+            for rec in self.db.get_signals():
+                key = (rec["symbol"], rec["timeframe"], rec["signal_type"])
+                self.signals_map[key] = rec["details"]
+
+                # порядок значений строго = self.columns
+                self.tree.insert("", "end", values=[
+                    rec.get("symbol"),
+                    rec.get("timeframe"),
+                    rec.get("signal_type"),
+                    float(rec.get("current_price", 0)),
+                    rec.get("recommendation"),
+                    float(rec.get("score", 0)),
+                    datetime.fromtimestamp(rec["created_at"]).strftime("%Y-%m-%d %H:%M"),
+                    round(rec.get("rsi", 0), 1)   if rec.get("rsi") else "",
+                    round(rec.get("macd", 0), 4)  if rec.get("macd") else "",
+                    round(rec.get("stoch_k", 0), 1) if rec.get("stoch_k") else "",
+                    round(rec.get("stoch_d", 0), 1) if rec.get("stoch_d") else "",
+                    round(rec.get("atr", 0), 6)  if rec.get("atr") else "",
+                    round(rec.get("adx", 0), 1)  if rec.get("adx") else "",
+                    round(rec.get("oi", 0))      if rec.get("oi") else "",
+                    round(rec.get("fund_rate", 0), 6) if rec.get("fund_rate") else "",
+                    rec.get("supertrend"),
+                    round(rec.get("vwap", 0), 6) if rec.get("vwap") else "",
+                    round(rec.get("poc", 0), 6)  if rec.get("poc") else "",
+                    round(rec.get("sentiment", 0), 1) if rec.get("sentiment") else "",
+                    "…"           # details в отдельном окне; здесь placeholder
                 ])
         except Exception as e:
             logger.error(f"Ошибка при загрузке сигналов: {e}")
 
-    def sort_by_column(self, tree, col, reverse):
+    # ------------ сортировка -------------------------------------
+    def sort_by_column(self, col, reverse):
+        data = [(self.tree.set(k, col), k) for k in self.tree.get_children("")]
         try:
-            data = [(tree.set(k, col), k) for k in tree.get_children("")]
-
-            # Определяем, нужно ли сортировать как float
-            is_numeric = True
-            for val, _ in data:
-                try:
-                    float(val)
-                except (ValueError, TypeError):
-                    is_numeric = False
-                    break
-
-            if is_numeric:
-                data.sort(key=lambda t: float(t[0]), reverse=reverse)
-            else:
-                data.sort(key=lambda t: str(t[0]), reverse=reverse)
-
-        except Exception as e:
-            logger.warning(f"❌ Ошибка сортировки по колонке '{col}': {e}")
+            data.sort(key=lambda t: float(t[0]), reverse=reverse)
+        except ValueError:
             data.sort(key=lambda t: str(t[0]), reverse=reverse)
 
-        for index, (_, k) in enumerate(data):
-            tree.move(k, "", index)
+        for idx, (_, k) in enumerate(data):
+            self.tree.move(k, "", idx)
 
-        tree.heading(col, command=lambda: self.sort_by_column(tree, col, not reverse))
+        self.tree.heading(col,
+                          command=lambda: self.sort_by_column(col, not reverse))
 
-    def draw_alerts_table(self, on_select=None):
-        window = tk.Toplevel(self.master)
-        window.title("Алерты")
-        window.geometry("900x600")
+    # ------------ вспомогательные callbacks ----------------------
+    def _handle_select(self, on_select):
+        sel = self.tree.selection()
+        if sel:
+            vals = self.tree.item(sel[0])["values"]
+            on_select(vals[0], vals[1])       # symbol, timeframe
 
-        columns = ("symbol", "level_price", "current_price", "distance", "type", "strength", "timeframe")
-        tree = ttk.Treeview(window, columns=columns, show="headings")
-        for col in columns:
-            tree.heading(col, text=col, command=lambda _col=col: self._sort_column(tree, _col, False))
-            tree.column(col, anchor=tk.CENTER, width=100)
-        tree.pack(fill="both", expand=True)
-
-        if on_select:
-            tree.bind("<Double-1>", lambda e: self._handle_select(tree, on_select))
-
-        def refresh():
-            for row in tree.get_children():
-                tree.delete(row)
-            try:
-                conn = self.db.get_connection()
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT symbol, level_price, current_price, distance, type, strength, timeframe
-                        FROM alerts
-                        ORDER BY created_at DESC
-                        LIMIT 100
-                    """)
-                    for row in cur.fetchall():
-                        tree.insert("", "end", values=row)
-            except Exception as e:
-                logger.error(f"Ошибка обновления алертов: {e}")
-            finally:
-                self.db.release_connection(conn)
-
-        ttk.Button(window, text="Обновить", command=refresh).pack(pady=5)
-        refresh()
-
-    def _sort_column(self, tree, col, reverse):
-        try:
-            l = [(tree.set(k, col), k) for k in tree.get_children('')]
-            l.sort(key=lambda t: float(t[0]) if t[0].replace('.', '', 1).isdigit() else t[0], reverse=reverse)
-        except ValueError:
-            l.sort(reverse=reverse)
-        for index, (_, k) in enumerate(l):
-            tree.move(k, '', index)
-        tree.heading(col, command=lambda: self._sort_column(tree, col, not reverse))
-
-    def _handle_select(self, tree, callback):
-        selected = tree.selection()
-        if not selected:
+    def _on_double_click(self, _event):
+        sel = self.tree.selection()
+        if not sel:
             return
-        item = tree.item(selected[0], "values")
-        columns = tree["columns"]
+        vals = self.tree.item(sel[0], "values")
+        key  = (vals[0], vals[1], vals[2])    # symbol, timeframe, type
+        details = self.signals_map.get(key, [])
+        if isinstance(details, str):
+            import ast
+            try: details = ast.literal_eval(details)
+            except: pass
 
-        if columns == ("symbol", "timeframe", "signal_type", "price", "time", "indicator", "score"):
-            symbol = item[0]
-            timeframe = item[1]
-        elif columns == ("symbol", "level_price", "current_price", "distance", "type", "strength", "timeframe"):
-            symbol = item[0]
-            timeframe = item[6]
-        else:
-            logger.warning(f"❌ Не удалось определить формат строки таблицы: {item}")
-            return
-
-        callback(symbol, timeframe)
-
+        top = tk.Toplevel(self.tree)
+        top.title(f"Детали сигнала: {vals[0]} ({vals[1]})")
+        txt = tk.Text(top, wrap=tk.WORD)
+        txt.insert(tk.END,
+                   "\n".join(details) if isinstance(details, list) else str(details))
+        txt.config(state=tk.NORMAL)
+        txt.pack(expand=True, fill=tk.BOTH)
+        tk.Button(top, text="Закрыть", command=top.destroy).pack(pady=5)

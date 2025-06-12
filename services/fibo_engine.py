@@ -1,4 +1,3 @@
-# services/fibo_engine.py
 import logging
 import pandas as pd
 from database.database import DatabaseManager
@@ -30,5 +29,3 @@ class FiboEngine:
             "low": low,
             "fibo_levels": dict(zip(FIBO_LEVELS, fibo))
         }
-
-

@@ -1,5 +1,3 @@
-# services/data_manager.py
-
 from database.database import DatabaseManager
 import pandas as pd
 from datetime import datetime
@@ -92,4 +90,3 @@ def get_signals_table():
 
 def clear_database():
     db.truncate_all_tables()
-

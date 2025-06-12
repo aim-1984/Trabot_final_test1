@@ -170,4 +170,3 @@ class ChartDrawer:
         width = (self.ax.get_xlim()[1] - self.ax.get_xlim()[0]) * 1.2
         self.ax.set_xlim(center - width / 2, center + width / 2)
         self.fig.canvas.draw_idle()
-
