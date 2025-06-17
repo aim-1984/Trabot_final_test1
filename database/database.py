@@ -169,6 +169,18 @@ class DatabaseManager:
                 fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """,
+            """
+            CREATE TABLE IF NOT EXISTS open_orders (
+                id SERIAL PRIMARY KEY,
+                symbol VARCHAR(20),
+                entry_price DECIMAL(20,8),
+                leverage INT,
+                open_time BIGINT,
+                target_price DECIMAL(20,8),
+                stop_loss DECIMAL(20,8),
+                order_id VARCHAR(50)
+            );
+            """,
 
             # Таблица signals
             """

@@ -1,19 +1,16 @@
 # main.py
 
-# main.py — точка входа для запуска gui
-import sys
-import os
-# os.environ["QT_QPA_PLATFORM"] = "wayland-egl"  # или "wayland-egl"
-os.environ["XDG_SESSION_TYPE"] = "x11"
-
+# main.py
+import sys, os
 from PyQt5.QtWidgets import QApplication
-from gui.app import create_main_window
-from config.settings import Settings
+from gui.main_screen import MainScreen
+
+os.environ["XDG_SESSION_TYPE"] = "x11"   # как у вас было
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = create_main_window()
-    window.mainloop()
+    main_screen = MainScreen()
+    main_screen.show()
     sys.exit(app.exec_())
 
 
@@ -393,6 +390,10 @@ def create_main_window():
 
     return root
 
+if __name__ == "__main__":
+    root = create_main_window()
+    root.mainloop()
+
 
 
 # gui/chart_drawer.py
@@ -569,6 +570,103 @@ class ChartDrawer:
         width = (self.ax.get_xlim()[1] - self.ax.get_xlim()[0]) * 1.2
         self.ax.set_xlim(center - width / 2, center + width / 2)
         self.fig.canvas.draw_idle()
+
+
+
+# gui/exchange_settings.py
+
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox
+)
+from config.settings import Settings
+from PyQt5.QtWidgets import QCheckBox
+
+
+class ExchangeSettingsWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Настройки биржи")
+        self.setFixedSize(450, 320)
+        self.layout = QVBoxLayout()
+        self.setLayout(self.layout)
+
+        self.exchanges = ["Binance", "Bybit", "TInvest"]
+        self.fields = {}
+
+        for exchange in self.exchanges:
+            self._add_exchange_section(exchange)
+
+        btn_row = QHBoxLayout()
+        apply_btn = QPushButton("Применить")
+        exit_btn = QPushButton("Выход")
+
+        connect_btn = QPushButton("Подключиться")
+        connect_btn.clicked.connect(self._connect_exchanges)
+        btn_row.addWidget(connect_btn)
+
+        apply_btn.clicked.connect(self.save_and_close)
+        exit_btn.clicked.connect(self.close)
+
+        btn_row.addWidget(apply_btn)
+        btn_row.addWidget(exit_btn)
+        self.layout.addLayout(btn_row)
+
+        self._load_existing()
+
+    def _add_exchange_section(self, name):
+        ex_key = name.lower()
+
+        label = QLabel(f"🔹 {name}")
+        label.setStyleSheet("font-weight: bold; margin-top: 8px;")
+        self.layout.addWidget(label)
+
+        api_input = QLineEdit()
+        api_input.setEchoMode(QLineEdit.Password)
+        api_input.setPlaceholderText("API Key")
+
+        secret_input = QLineEdit()
+        secret_input.setEchoMode(QLineEdit.Password)
+        secret_input.setPlaceholderText("Secret Key")
+
+        checkbox = QCheckBox("Включить подключение")
+
+        # сохраним все три элемента в fields
+        self.fields[ex_key] = (api_input, secret_input, checkbox)
+
+        self.layout.addWidget(api_input)
+        self.layout.addWidget(secret_input)
+        self.layout.addWidget(checkbox)
+
+    def _load_existing(self):
+        settings = Settings()
+        for name in self.exchanges:
+            ex_key = name.lower()
+            api, secret = settings.exchanges.get(ex_key, ("", ""))
+            self.fields[ex_key][0].setText(api)
+            self.fields[ex_key][1].setText(secret)
+            checkbox = self.fields[ex_key][2]
+            checkbox.setChecked(settings.active_exchanges.get(ex_key, False))
+
+    def _connect_exchanges(self):
+        from trading.exchange_connection import ExchangeConnector
+        connector = ExchangeConnector()
+        connector.connect_all()
+        QMessageBox.information(self, "Подключено", "Выбранные биржи успешно подключены.")
+
+    def save_and_close(self):
+        settings = Settings()
+        for name in self.exchanges:
+            ex_key = name.lower()
+            api = self.fields[ex_key][0].text()
+            secret = self.fields[ex_key][1].text()
+            settings.exchanges[ex_key] = (api, secret)
+            checkbox = self.fields[ex_key][2]
+            settings.active_exchanges[ex_key] = checkbox.isChecked()
+        settings.save()
+        QMessageBox.information(self, "Сохранено", "Данные успешно сохранены.")
+        self.close()
+
+
 
 
 
@@ -919,6 +1017,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
+from gui.orders_window import OrdersWindow
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
@@ -989,11 +1088,13 @@ class MainScreen(QMainWindow):
         central.setLayout(layout)
 
         layout.addWidget(self._make_button("Окно аналитика", lambda: _launch_script("gui.app", self)))
-        layout.addWidget(self._make_button("Риск-профили", lambda: _show_stub("Риск-профили", self)))
-        layout.addWidget(self._make_button("Настройки биржи", lambda: _show_stub("Настройки биржи", self)))
-        layout.addWidget(self._make_button("Настройки ордеров", lambda: _show_stub("Настройки ордеров", self)))
+        layout.addWidget(self._make_button("Окно ордеров", lambda: self._open_orders_window()))
+        layout.addWidget(self._make_button("Риск-профили", lambda: self._open_risk_profiles()))
+        layout.addWidget(self._make_button("Настройки биржи", lambda: self._open_exchange_settings()))
+        layout.addWidget(self._make_button("Настройки ордеров", lambda: self._open_order_settings()))
         layout.addWidget(self._make_button("Логи", lambda: _show_stub("Логи", self)))
         layout.addWidget(self._make_button("Остановить все сделки", lambda: _stop_all_trades(self)))
+        layout.addWidget(self._make_button("Выход", self.close))
 
     def _make_button(self, title: str, slot) -> QPushButton:  # type: ignore[valid-type]
         btn = QPushButton(title, self)
@@ -1001,7 +1102,271 @@ class MainScreen(QMainWindow):
         btn.clicked.connect(slot)  # type: ignore[arg-type]
         return btn
 
+    def _open_risk_profiles(self):
+        from gui.risk_profile_gui import RiskProfileWindow
+        self.risk_window = RiskProfileWindow()
+        self.risk_window.show()
 
+    def _open_exchange_settings(self):
+        from gui.exchange_settings import ExchangeSettingsWindow
+        self.exch_window = ExchangeSettingsWindow()
+        self.exch_window.show()
+
+    def _open_order_settings(self):
+        from gui.order_settings import OrderSettingsWindow
+        self.order_window = OrderSettingsWindow()
+        self.order_window.show()
+
+    def _open_orders_window(self):
+        from gui.orders_window import OrdersWindow
+        self.orders_win = OrdersWindow()
+        self.orders_win.show()
+
+
+
+
+
+
+
+# gui/order_settings.py
+
+# gui/order_settings.py
+
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QLabel, QPushButton, QMessageBox, QHBoxLayout,
+    QGroupBox, QCheckBox, QSpinBox, QTimeEdit, QComboBox
+)
+from PyQt5.QtCore import Qt, QTime
+from trading.pre_order_manager import PreOrderManager
+from config.settings import Settings
+
+class OrderSettingsWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Настройки ордеров")
+        self.setFixedSize(500, 550)
+
+        self.layout = QVBoxLayout()
+        self.setLayout(self.layout)
+
+        self.manager = PreOrderManager()
+        self.settings = Settings()
+
+        # Подключение
+        self.status_label = QLabel("Статус подключения: ...")
+        self.balance_label = QLabel("Текущий баланс: ...")
+        self.session_balance_label = QLabel("Баланс на начало дня: ...")
+        self.layout.addWidget(self.status_label)
+        self.layout.addWidget(self.balance_label)
+        self.layout.addWidget(self.session_balance_label)
+
+        # Таймфреймы
+        tf_group = QGroupBox("Таймфреймы для автоторговли")
+        tf_layout = QVBoxLayout()
+        self.tf_checkboxes = {}
+        for tf in ["1d", "4h", "1h", "15m"]:
+            cb = QCheckBox(tf)
+            cb.setChecked(tf in self.settings.trade_timeframes)
+            tf_layout.addWidget(cb)
+            self.tf_checkboxes[tf] = cb
+        tf_group.setLayout(tf_layout)
+        self.layout.addWidget(tf_group)
+
+        # Временное окно торговли
+        time_group = QGroupBox("Временные рамки для торговли")
+        time_layout = QHBoxLayout()
+        self.start_time = QTimeEdit(QTime.fromString(self.settings.trade_window["start"], "hh:mm"))
+        self.end_time = QTimeEdit(QTime.fromString(self.settings.trade_window["end"], "hh:mm"))
+        time_layout.addWidget(QLabel("C:"))
+        time_layout.addWidget(self.start_time)
+        time_layout.addWidget(QLabel("До:"))
+        time_layout.addWidget(self.end_time)
+        time_group.setLayout(time_layout)
+        self.layout.addWidget(time_group)
+
+        # Максимальное время удержания
+        hold_group = QGroupBox("Макс. время удержания сделки (часы)")
+        hold_layout = QVBoxLayout()
+        self.hold_spin = QSpinBox()
+        self.hold_spin.setRange(1, 72)
+        self.hold_spin.setValue(self.settings.max_holding_hours)
+        hold_layout.addWidget(self.hold_spin)
+        hold_group.setLayout(hold_layout)
+        self.layout.addWidget(hold_group)
+
+        # Кредитное плечо
+        leverage_group = QGroupBox("Кредитное плечо (cross margin)")
+        leverage_layout = QVBoxLayout()
+        self.leverage_combo = QComboBox()
+        self.leverage_combo.addItems(["1", "2", "3", "4", "5"])
+        self.leverage_combo.setCurrentText(str(self.settings.leverage))
+        leverage_layout.addWidget(self.leverage_combo)
+        leverage_group.setLayout(leverage_layout)
+        self.layout.addWidget(leverage_group)
+
+        # Кнопки
+        btns = QHBoxLayout()
+        apply_btn = QPushButton("Применить")
+        exit_btn = QPushButton("Выход")
+        apply_btn.clicked.connect(self.apply_changes)
+        exit_btn.clicked.connect(self.close)
+        btns.addWidget(apply_btn)
+        btns.addWidget(exit_btn)
+        self.layout.addLayout(btns)
+
+        self.refresh_data()
+
+    def refresh_data(self):
+        status = self.manager.is_cross_margin_active()
+        balance = self.manager.get_total_usdt_balance()
+        session = self.manager.check_and_store_session_balance()
+        self.status_label.setText(f"Статус подключения: {'Активно' if status else 'Неактивно'}")
+        self.balance_label.setText(f"Текущий баланс: {balance:.2f} USDT")
+        self.session_balance_label.setText(f"Баланс на начало дня: {session:.2f} USDT")
+
+    def apply_changes(self):
+        # Таймфреймы
+        self.settings.trade_timeframes = [tf for tf, cb in self.tf_checkboxes.items() if cb.isChecked()]
+
+        # Временное окно
+        self.settings.trade_window = {
+            "start": self.start_time.time().toString("hh:mm"),
+            "end": self.end_time.time().toString("hh:mm")
+        }
+
+        # Макс. удержание
+        self.settings.max_holding_hours = self.hold_spin.value()
+
+        # Кредитное плечо
+        self.settings.leverage = int(self.leverage_combo.currentText())
+
+        self.settings.save()
+        QMessageBox.information(self, "Сохранено", "Настройки ордеров обновлены.")
+        self.close()
+
+
+
+# gui/orders_window.py
+
+from __future__ import annotations   # ← двойное подчёркивание вокруг future!
+
+import logging
+from datetime import datetime, timedelta
+
+from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
+    QPushButton, QMessageBox
+)
+
+from trading.order_manager import OrderManager
+
+logger = logging.getLogger(__name__)   # ← используем __name__
+
+class OrdersWindow(QWidget):
+    """Окно с текущими ордерами и запуском автоторговли."""
+
+    REFRESH_INTERVAL_MS = 60_000       # обновляем раз в минуту
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("Ордера (active orders)")
+        self.setFixedSize(900, 500)
+
+        self.manager = OrderManager()
+
+        # ---------- layout ----------
+        root = QVBoxLayout(self)
+
+        # таблица
+        self.table = QTableWidget(0, 8, self)
+        self.table.setHorizontalHeaderLabels([
+            "Пара", "Открыт", "Цена входа", "Текущая цена", "Плечо",
+            "До закрытия", "Стоп-лосс", "Таргет"
+        ])
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setSortingEnabled(True)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        root.addWidget(self.table)
+
+        # кнопки
+        btn_row = QHBoxLayout()
+        root.addLayout(btn_row)
+
+        self.btn_autotrade = QPushButton("Начать автоторговлю")
+        self.btn_close_all = QPushButton("Закрыть все ордера")
+        self.btn_exit      = QPushButton("Выход")
+
+        btn_row.addWidget(self.btn_autotrade)
+        btn_row.addWidget(self.btn_close_all)
+        btn_row.addStretch(1)
+        btn_row.addWidget(self.btn_exit)
+
+        # callbacks
+        self.btn_exit.clicked.connect(self.close)
+        self.btn_close_all.clicked.connect(self._close_all)
+        self.btn_autotrade.clicked.connect(self._start_autotrade)
+
+        # таймер авто-обновления
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._refresh)
+        self.timer.start(self.REFRESH_INTERVAL_MS)
+
+        self._refresh()
+
+    # ------------------------------------------------------------------
+    # internals
+    # ------------------------------------------------------------------
+    def _refresh(self) -> None:
+        """Обновляет таблицу актуальными данными."""
+        orders = self.manager.get_open_orders()
+        self.table.setRowCount(len(orders))
+        for row, o in enumerate(orders):
+            cells = [
+                o["symbol"],
+                datetime.fromtimestamp(o["open_time"]).strftime("%Y-%m-%d %H:%M"),
+                f"{o['entry_price']:.6f}",
+                f"{o['current_price']:.6f}",
+                str(o["leverage"]),
+                self._format_remaining(o["close_at"]),
+                f"{o['stop_loss']:.6f}",
+                f"{o['target_price']:.6f}",
+            ]
+            for col, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                item.setTextAlignment(Qt.AlignCenter)
+                self.table.setItem(row, col, item)
+
+    @staticmethod
+    def _format_remaining(close_ts: int | None) -> str:
+        if not close_ts:
+            return "-"
+        delta = timedelta(seconds=max(0, close_ts - int(datetime.utcnow().timestamp())))
+        return str(delta).split(".")[0]          # HH:MM:SS
+
+    # ------------------------------------------------------------------
+    # buttons
+    # ------------------------------------------------------------------
+    def _close_all(self) -> None:
+        if QMessageBox.question(self, "Подтвердите", "Закрыть ВСЕ ордера?",
+                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        ok, msg = self.manager.close_all_orders()
+        if ok:
+            QMessageBox.information(self, "Готово", "Все ордера закрыты.")
+            self._refresh()
+        else:
+            QMessageBox.critical(self, "Ошибка", msg)
+
+    def _start_autotrade(self) -> None:
+        ok, msg = self.manager.start_autotrading()
+        if ok:
+            QMessageBox.information(self, "Автоторговля", msg)
+            self._refresh()
+        else:
+            QMessageBox.warning(self, "Автоторговля", msg)
 
 
 
@@ -1093,6 +1458,92 @@ class PredictorUI:
         text_box.config(state="disabled")
 
         ttk.Button(detail_win, text="Закрыть", command=detail_win.destroy).pack(pady=10)
+
+
+
+# gui/risk_profile_gui.py
+
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QSlider, QRadioButton, QPushButton, QLabel, QHBoxLayout, QMessageBox
+from PyQt5.QtCore import Qt
+from config.settings import Settings
+
+class RiskProfileWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Настройка риск-профиля")
+        self.setFixedSize(400, 250)
+
+        self.layout = QVBoxLayout()
+        self.setLayout(self.layout)
+
+        # Ползунок
+        self.slider_label = QLabel("Уровень риска: 0")
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setMinimum(0)
+        self.slider.setMaximum(100)
+        self.slider.setValue(0)
+        self.slider.valueChanged.connect(self.update_slider_label)
+
+        # Переключатели
+        self.low_risk = QRadioButton("Низкий риск")
+        self.mid_risk = QRadioButton("Средний риск")
+        self.high_risk = QRadioButton("Высокий риск")
+        self.low_risk.setChecked(True)
+
+        # Кнопки
+        self.default_btn = QPushButton("По умолчанию")
+        self.apply_btn = QPushButton("Применить")
+        self.default_btn.clicked.connect(self.set_defaults)
+        self.apply_btn.clicked.connect(self.apply_profile)
+
+        # Добавление в layout
+        self.layout.addWidget(self.slider_label)
+        self.layout.addWidget(self.slider)
+        self.layout.addWidget(self.low_risk)
+        self.layout.addWidget(self.mid_risk)
+        self.layout.addWidget(self.high_risk)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addWidget(self.default_btn)
+        btn_layout.addWidget(self.apply_btn)
+        self.layout.addLayout(btn_layout)
+
+    def update_slider_label(self, value):
+        self.slider_label.setText(f"Уровень риска: {value}")
+
+        if value <= 33:
+            self.low_risk.setChecked(True)
+        elif value <= 66:
+            self.mid_risk.setChecked(True)
+        else:
+            self.high_risk.setChecked(True)
+
+    def set_defaults(self):
+        self.slider.setValue(0)
+        self.low_risk.setChecked(True)
+
+    def apply_profile(self):
+        risk_value = self.slider.value()
+
+        if risk_value <= 33:
+            risk_level = "low"
+            target = 1
+        elif risk_value <= 66:
+            risk_level = "medium"
+            target = 2
+        else:
+            risk_level = "high"
+            target = 3
+
+        # Сохраняем глобально или в конфиг
+        settings = Settings()
+        settings.risk_level = risk_level
+        settings.risk_value = risk_value
+        settings.target_index = target
+        settings.save()
+
+        QMessageBox.information(self, "Применено", f"Установлен профиль: {risk_level.upper()} (TP{target})")
+
 
 
 
@@ -1330,14 +1781,128 @@ CANDLE_SETTINGS = {
 
 # config/settings.py
 
+import json
+import os
+from cryptography.fernet import Fernet
+
+KEY_FILE = os.path.join(os.path.dirname(__file__), ".secret.key")
+SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "user_settings.json")
+
+
 class Settings:
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(Settings, cls).__new__(cls)
+            cls._instance.__initialized = False
+        return cls._instance
+
     def __init__(self):
+        if self.__initialized:
+            return
+        self.__initialized = True
+
+        self.exchanges = {
+            "binance": ("", ""),
+            "bybit": ("", ""),
+            "tinvest": ("", "")
+        }
+
+        self.active_exchanges = {
+            "binance": False,
+            "bybit": False,
+            "tinvest": False
+        }
+
+        # Биржевые настройки
         self.exchange = "Binance"
         self.api_key = ""
         self.api_secret = ""
         self.leverage = 1
         self.stop_loss = 0.0
         self.take_profit = 0.0
+
+        # Риск-профиль
+        self.risk_level = "low"
+        self.risk_value = 0
+        self.target_index = 1
+
+        self.trade_timeframes = ["1h", "4h"]
+        self.trade_window = {"start": "09:00", "end": "18:00"}
+        self.max_holding_hours = 12
+        self.session_start_balance = 0.0
+        self.session_start_balance_time = None
+
+        self._load()
+
+    @staticmethod
+    def get_crypto():
+        if not os.path.exists(KEY_FILE):
+            key = Fernet.generate_key()
+            with open(KEY_FILE, "wb") as f:
+                f.write(key)
+        else:
+            with open(KEY_FILE, "rb") as f:
+                key = f.read()
+        return Fernet(key)
+
+    def _load(self):
+        if not os.path.exists(SETTINGS_FILE):
+            return
+        f = self.get_crypto()
+
+        with open(SETTINGS_FILE, "r") as inp:
+            data = json.load(inp)
+            self.risk_level = data.get("risk_level", "low")
+            self.risk_value = data.get("risk_value", 0)
+            self.target_index = data.get("target_index", 1)
+            self.active_exchanges = data.get("active_exchanges", self.active_exchanges)
+            self.trade_timeframes = data.get("trade_timeframes", ["1h", "4h"])
+            self.trade_window = data.get("trade_window", {"start": "09:00", "end": "18:00"})
+            self.max_holding_hours = data.get("max_holding_hours", 12)
+            self.session_start_balance = data.get("session_start_balance", 0.0)
+            self.session_start_balance_time = data.get("session_start_balance_time", None)
+            self.leverage = data.get("leverage", 1)
+
+
+            raw_exchanges = data.get("exchanges", {})
+            decrypted = {}
+            for name, token in raw_exchanges.items():
+                try:
+                    decrypted_data = f.decrypt(token.encode()).decode()
+                    api, secret = decrypted_data.split("||")
+                    decrypted[name] = (api, secret)
+                except Exception as e:
+                    print(f"⚠️ Ошибка расшифровки {name}: {e}")
+            self.exchanges = decrypted
+
+    def save(self):
+        f = self.get_crypto()
+
+        encrypted_exchanges = {}
+        for name, (api, secret) in self.exchanges.items():
+            data = f"{api}||{secret}".encode()
+            token = f.encrypt(data).decode()
+            encrypted_exchanges[name] = token
+
+        with open(SETTINGS_FILE, "w") as out:
+            json.dump({
+                "risk_level": self.risk_level,
+                "risk_value": self.risk_value,
+                "target_index": self.target_index,
+                "exchanges": encrypted_exchanges,
+                "active_exchanges": self.active_exchanges,
+                "trade_timeframes": self.trade_timeframes,
+                "trade_window": self.trade_window,
+                "max_holding_hours": self.max_holding_hours,
+                "session_start_balance": self.session_start_balance,
+                "session_start_balance_time": self.session_start_balance_time,
+                "leverage": self.leverage,
+            }, out, indent=2)
+
+
+
 
 
 
@@ -1518,6 +2083,18 @@ class DatabaseManager:
                 id SERIAL PRIMARY KEY,
                 total_cap DECIMAL(20,2) NOT NULL,
                 fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS open_orders (
+                id SERIAL PRIMARY KEY,
+                symbol VARCHAR(20),
+                entry_price DECIMAL(20,8),
+                leverage INT,
+                open_time BIGINT,
+                target_price DECIMAL(20,8),
+                stop_loss DECIMAL(20,8),
+                order_id VARCHAR(50)
             );
             """,
 
@@ -2151,16 +2728,393 @@ class DatabaseManager:
 
 
 
-# trading/executor.py
+# trading/exchange_connection.py
+
+# trading/exchange_connection.py
+from binance.client import Client as BinanceClient
+from typing import List            # ← ⑴
+from decimal import Decimal        # ← ⑴
+import logging
+
+logger = logging.getLogger(__name__)
+
+class ExchangeConnector:
+    def __init__(self) -> None:
+        from config.settings import Settings
+        self.settings = Settings()
+        self.clients: dict[str, BinanceClient] = {}
+        self._binance: BinanceClient | None = None      # ← ① атрибут-ссылка
+        self.connect_all()
+
+    def connect_all(self) -> None:
+        """Создаёт клиенты для активных бирж (пока только Binance)."""
+        for name, active in self.settings.active_exchanges.items():
+            if not active:
+                continue
+
+            api, secret = self.settings.exchanges.get(name, ("", ""))
+            if not api or not secret:
+                logger.info(f"{name}: ключи не заданы – пропуск")
+                continue
+
+            try:
+                if name == "binance":
+                    client = BinanceClient(api, secret)
+                    client.API_URL = "https://api.binance.com"
+                    self.clients["binance"] = client
+                    self._binance = client              # ← ③ сохраняем
+                    logger.info("✅ Binance подключён")
+                # elif name == "bybit": …
+            except Exception as e:
+                logger.error("❌ Ошибка подключения к %s: %s", name, e)
+
+    def _binance(self) -> BinanceClient | None:  # ← опционально
+        return self.clients.get("binance")
+
+    def get_client(self, exchange_name: str):
+        if exchange_name not in self.clients:
+            self.connect_all()  # на всякий случай
+        return self.clients.get(exchange_name)
+
+    def get_total_usdt_balance(self) -> float:
+        if not self._binance:
+            logger.warning("Binance не инициализирован – balance=0")
+            return 0.0
+        try:
+            info = self._binance.get_account()
+            totals = [
+                float(a["free"]) + float(a["locked"])
+                for a in info["balances"]
+                if a["asset"] in {"USDT", "BUSD", "FDUSD", "USDC"}
+            ]
+            return sum(totals)
+        except Exception as e:
+            logger.error("get_total_usdt_balance: %s", e)
+            return 0.0
+
+    def get_ticker_price(self, symbol: str) -> float:
+        if not self._binance:
+            return 0.0
+        try:
+            return float(self._binance.get_symbol_ticker(symbol=symbol)["price"])
+        except Exception as e:
+            logger.error("get_ticker_price %s: %s", symbol, e)
+            return 0.0
+
+    def get_available_leverages(self, symbol: str) -> List[int]:
+        if not self._binance:
+            return [1]
+        try:
+            info = self._binance.futures_exchange_info()
+            for s in info["symbols"]:
+                if s["symbol"] == symbol:
+                    return sorted(
+                        {int(b["initialLeverage"]) for b in s["leverageBrackets"][0]["brackets"]}
+                    )
+        except Exception as e:
+            logger.error("get_available_leverages %s: %s", symbol, e)
+        return [1]
+
+    def open_order(self, symbol: str, side: str, qty: float,
+                   tp: float, sl: float, leverage: int = 1) -> str | None:
+        if not self._binance:
+            logger.warning("Binance off – open_order skipped")
+            return None
+        try:
+            self._binance.futures_change_leverage(symbol=symbol, leverage=leverage)
+            res = self._binance.futures_create_order(
+                symbol=symbol, side=side, type="MARKET", quantity=Decimal(str(qty))
+            )
+            return str(res["orderId"])
+        except Exception as e:
+            logger.error("open_order: %s", e)
+            return None
+
+    def close_order(self, symbol: str, order_id: str) -> bool:
+        if not self._binance:
+            return False
+        try:
+            self._binance.futures_cancel_order(symbol=symbol, orderId=order_id)
+            return True
+        except Exception as e:
+            logger.error("close_order: %s", e)
+            return False
 
 
 
 
 
-# trading/order.py
+
+# trading/order_manager.py
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timedelta
+
+from config.settings import Settings
+from services.predictor import Predictor
+from trading.exchange_connection import ExchangeConnector
+from database.database import DatabaseManager
+
+logger = logging.getLogger(__name__)
+
+class OrderManager:
+
+
+    def __init__(self):
+        self.settings = Settings()
+        self.db = DatabaseManager()
+        self.connector = ExchangeConnector()   # уже умеет connect_all()
+
+    # ---------------- текущие ордера ----------------------------------
+    def get_open_orders(self) -> list[dict]:
+        """Загружаем открытые ордера из БД или биржи (упрощённо)."""
+        try:
+            conn = self.db.get_connection()
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT symbol, entry_price, leverage, open_time, target_price, stop_loss, order_id
+                    FROM open_orders ORDER BY open_time DESC
+                """)
+                rows = cur.fetchall()
+        except Exception as err:
+            logger.error("DB error: %s", err)
+            rows = []
+        finally:
+            self.db.release_connection(conn)
+
+        results = []
+        for r in rows:
+            symbol, entry_price, leverage, open_time, tp, sl, order_id = r
+            # берём актуальную цену из биржи (одна пара = один REST запрос)
+            current_price = self.connector.get_ticker_price(symbol)
+            # оценим время до закрытия (макс holding_hours)
+            close_at = self._calc_close_ts(open_time)
+            results.append({
+                "symbol": symbol,
+                "entry_price": float(entry_price),
+                "current_price": current_price,
+                "leverage": leverage,
+                "open_time": open_time,
+                "target_price": float(tp),
+                "stop_loss": float(sl),
+                "close_at": close_at,
+            })
+        return results
+
+    def _calc_close_ts(self, open_ts: int | float) -> int | None:
+        max_h = self.settings.max_holding_hours
+        if not max_h:
+            return None
+        return int(open_ts + max_h * 3600)
+
+    # ---------------- закрытие ----------------------------------------
+    def close_all_orders(self):
+        try:
+            open_orders = self.get_open_orders()
+            for o in open_orders:
+                self.connector.close_order(o["symbol"], o["order_id"])
+            return True, f"Закрыто {len(open_orders)} ордеров"
+        except Exception as err:
+            logger.error("close_all_orders: %s", err)
+            return False, str(err)
+
+    # ---------------- автоторговля ------------------------------------
+    def start_autotrading(self):
+        """Алгоритм открытия ордеров согласно ТЗ пользователя."""
+        predictor = Predictor()
+        signals = predictor.analyze_all()
+        if not signals:
+            return False, "Нет сигналов от предиктора"
+
+        # 1. Доступные средства на начало сессии (фиксируются 1 раз в день)
+        start_balance = self._ensure_session_balance()
+        per_order_cap = start_balance * 0.10
+
+        # 2. Считаем уже открытые ордера
+        active_orders = self.get_open_orders()
+        slots_left = max(0, 10 - len(active_orders))
+        if slots_left == 0:
+            return False, "Достигнут лимит 10 открытых ордеров"
+
+        # 3. Фильтруем/сортируем сигналы (score DESC, rec not "Не входить")
+        signals = [s for s in signals if s.get("recommendation") != "Не входить"]
+        signals.sort(key=lambda s: s.get("score", 0), reverse=True)
+        if not signals:
+            return False, "Нет подходящих сигналов (рекомендация = Не входить)"
+
+        opened, skipped = 0, 0
+        for sig in signals:
+            if opened >= slots_left:
+                break
+            if not self._open_order_from_signal(sig, per_order_cap):
+                skipped += 1
+                continue
+            opened += 1
+
+        return True, f"Открыто {opened} ордеров, пропущено {skipped}"
+
+    # ---------------- helpers -----------------------------------------
+    def _open_order_from_signal(self, sig: dict, per_capital: float) -> bool:
+        sym = sig["symbol"]
+        tpidx = self.settings.target_index  # 1|2|3 из риск‑профиля
+        tp_key = f"tp{tpidx}"
+        tp_price = float(sig.get(tp_key))
+        if not tp_price:
+            logger.info("signal %s нет tp%d", sym, tpidx);
+            return False
+
+        side = "BUY" if sig.get("direction") == "long" else "SELL"
+
+        # запрашиваем список допустимых плеч
+        leverage = self.settings.leverage
+        ok, leverage = self._adjust_leverage(sym, leverage)
+        if not ok:
+            return False
+
+        qty = per_capital * leverage / float(sig["entry_price"])
+        stop_loss = float(sig["stop_loss"])
+
+        order_id = self.connector.open_order(
+            symbol=sym, side=side, qty=qty, tp=tp_price, sl=stop_loss,
+            leverage=leverage
+        )
+        if order_id is None:
+            return False
+
+        # сохраняем в open_orders
+        self._record_open_order(sym, sig["entry_price"], leverage, tp_price, stop_loss, order_id)
+        logger.info("Opened %s %s x%dx @ %.6f", side, sym, leverage, sig["entry_price"])
+        return True
+
+    def _adjust_leverage(self, symbol: str, lev: int) -> tuple[bool, int]:
+        avail = self.connector.get_available_leverages(symbol)
+        if not avail:
+            logger.warning("Нет информации о плечах для %s", symbol)
+            return False, lev
+        while lev not in avail and lev > 0:
+            lev -= 1
+        if lev == 0:
+            logger.info("Недоступно плечо для %s", symbol)
+            return False, 0
+        return True, lev
+
+    def _ensure_session_balance(self) -> float:
+        """Возвращает баланс, зафиксированный в начале суток (UTC).
+        Если ещё не фиксировали сегодня — запрашивает с биржи и сохраняет."""
+        today = datetime.utcnow().date().isoformat()  # YYYY‑MM‑DD
+
+        # Если дата сохранена и совпадает с сегодняшним числом — просто возвращаем
+        if self.settings.session_start_balance_time == today:
+            return self.settings.session_start_balance or 0.0
+
+        # Иначе — запрашиваем актуальный баланс и фиксируем его
+        balance = self.connector.get_total_usdt_balance()
+        self.settings.session_start_balance = balance
+        self.settings.session_start_balance_time = today  # храним ТОЛЬКО дату, без времени
+        self.settings.save()
+        return balance
+
+    def _record_open_order(self, symbol, entry_price, lev, tp, sl, order_id):
+        conn = self.db.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO open_orders(symbol, entry_price, leverage, open_time, target_price, stop_loss, order_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (symbol, entry_price, lev, int(datetime.utcnow().timestamp()), tp, sl, order_id))
+            conn.commit()
+        except Exception as err:
+            logger.error("DB insert open_order: %s", err)
+            conn.rollback()
+        finally:
+            self.db.release_connection(conn)
 
 
 
+# trading/pre_order_manager.py
+
+# trading/pre_order_manager.py
+
+import logging
+from datetime import datetime, time
+from config.settings import Settings
+from trading.exchange_connection import ExchangeConnector
+
+logger = logging.getLogger(__name__)
+
+class PreOrderManager:
+    def __init__(self):
+        self.settings = Settings()
+        self.connector = ExchangeConnector()
+        self.exchange = self.settings.exchange.lower()
+
+    def is_cross_margin_active(self):
+        try:
+            client = self.connector.get_client(self.exchange)
+            if not client:
+                logger.warning(f"❌ Клиент {self.exchange} не подключён")
+                return False
+            account_info = client.get_margin_account()
+            return account_info.get("marginLevel") is not None
+        except Exception as e:
+            logger.warning(f"Ошибка проверки статуса кросс-маржин: {e}")
+            return False
+
+    def get_total_usdt_balance(self):
+        try:
+            client = self.connector.get_client(self.exchange)
+            if not client:
+                logger.warning(f"❌ Клиент {self.exchange} не подключён")
+                return 0.0
+            account_info = client.get_margin_account()
+            balances = account_info.get("userAssets", [])
+            for asset in balances:
+                if asset["asset"] == "USDT":
+                    total = float(asset["free"]) + float(asset["locked"])
+                    return round(total, 2)
+            return 0.0
+        except Exception as e:
+            logger.warning(f"Ошибка получения общего баланса USDT: {e}")
+            return 0.0
+
+    def get_available_usdt_balance(self):
+        try:
+            client = self.connector.get_client(self.exchange)
+            account_info = client.get_margin_account()
+            balances = account_info.get("userAssets", [])
+            for asset in balances:
+                if asset["asset"] == "USDT":
+                    return round(float(asset["free"]), 2)
+            return 0.0
+        except Exception as e:
+            logger.warning(f"Ошибка получения доступного баланса USDT: {e}")
+            return 0.0
+
+    def check_and_store_session_balance(self):
+        now = datetime.now()
+        start_time = time(0, 1)  # 00:01
+        last_recorded = self.settings.session_start_balance_time
+
+        if (not last_recorded or
+            now.date() != datetime.fromisoformat(last_recorded).date() and
+            now.time() >= start_time):
+            balance = self.get_total_usdt_balance()
+            self.settings.session_start_balance = balance
+            self.settings.session_start_balance_time = now.isoformat()
+            self.settings.save()
+            logger.info(f"Записан баланс на начало дня: {balance:.2f} USDT")
+        return self.settings.session_start_balance
+
+    def get_trade_settings(self):
+        return {
+            "risk_level": self.settings.risk_level,
+            "risk_value": self.settings.risk_value,
+            "trade_timeframes": self.settings.trade_timeframes,
+            "trade_window": self.settings.trade_window,
+            "max_holding_hours": self.settings.max_holding_hours
+        }
 
 
 # services/_init_.py

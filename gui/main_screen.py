@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
+from gui.orders_window import OrdersWindow
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
@@ -76,9 +77,10 @@ class MainScreen(QMainWindow):
         central.setLayout(layout)
 
         layout.addWidget(self._make_button("Окно аналитика", lambda: _launch_script("gui.app", self)))
+        layout.addWidget(self._make_button("Окно ордеров", lambda: self._open_orders_window()))
         layout.addWidget(self._make_button("Риск-профили", lambda: self._open_risk_profiles()))
         layout.addWidget(self._make_button("Настройки биржи", lambda: self._open_exchange_settings()))
-        layout.addWidget(self._make_button("Настройки ордеров", lambda: _show_stub("Настройки ордеров", self)))
+        layout.addWidget(self._make_button("Настройки ордеров", lambda: self._open_order_settings()))
         layout.addWidget(self._make_button("Логи", lambda: _show_stub("Логи", self)))
         layout.addWidget(self._make_button("Остановить все сделки", lambda: _stop_all_trades(self)))
         layout.addWidget(self._make_button("Выход", self.close))
@@ -98,6 +100,16 @@ class MainScreen(QMainWindow):
         from gui.exchange_settings import ExchangeSettingsWindow
         self.exch_window = ExchangeSettingsWindow()
         self.exch_window.show()
+
+    def _open_order_settings(self):
+        from gui.order_settings import OrderSettingsWindow
+        self.order_window = OrderSettingsWindow()
+        self.order_window.show()
+
+    def _open_orders_window(self):
+        from gui.orders_window import OrdersWindow
+        self.orders_win = OrdersWindow()
+        self.orders_win.show()
 
 
 

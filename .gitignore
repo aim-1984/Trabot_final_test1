@@ -1,1 +1,2 @@
 config/user_settings.json
+config/.secret.key
