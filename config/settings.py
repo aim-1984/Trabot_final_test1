@@ -17,6 +17,12 @@ class Settings:
         if self.__initialized:
             return
         self.__initialized = True
+        self.exchanges = {
+            "binance": ("", ""),
+            "bybit": ("", ""),
+            "tinvest": ("", "")
+        }
+        self._load()
 
         # Биржевые настройки
         self.exchange = "Binance"
@@ -42,6 +48,7 @@ class Settings:
                     self.risk_level = data.get("risk_level", "low")
                     self.risk_value = data.get("risk_value", 0)
                     self.target_index = data.get("target_index", 1)
+                    self.exchanges = data.get("exchanges", self.exchanges)
             except Exception as e:
                 print(f"⚠️ Ошибка загрузки настроек: {e}")
 
@@ -52,7 +59,8 @@ class Settings:
                 json.dump({
                     "risk_level": self.risk_level,
                     "risk_value": self.risk_value,
-                    "target_index": self.target_index
+                    "target_index": self.target_index,
+                    "exchanges": self.exchanges
                 }, f, indent=2)
         except Exception as e:
             print(f"⚠️ Ошибка сохранения настроек: {e}")

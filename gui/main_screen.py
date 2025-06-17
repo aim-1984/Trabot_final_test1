@@ -77,7 +77,7 @@ class MainScreen(QMainWindow):
 
         layout.addWidget(self._make_button("Окно аналитика", lambda: _launch_script("gui.app", self)))
         layout.addWidget(self._make_button("Риск-профили", lambda: self._open_risk_profiles()))
-        layout.addWidget(self._make_button("Настройки биржи", lambda: _show_stub("Настройки биржи", self)))
+        layout.addWidget(self._make_button("Настройки биржи", lambda: self._open_exchange_settings()))
         layout.addWidget(self._make_button("Настройки ордеров", lambda: _show_stub("Настройки ордеров", self)))
         layout.addWidget(self._make_button("Логи", lambda: _show_stub("Логи", self)))
         layout.addWidget(self._make_button("Остановить все сделки", lambda: _stop_all_trades(self)))
@@ -93,6 +93,11 @@ class MainScreen(QMainWindow):
         from gui.risk_profile_gui import RiskProfileWindow
         self.risk_window = RiskProfileWindow()
         self.risk_window.show()
+
+    def _open_exchange_settings(self):
+        from gui.exchange_settings import ExchangeSettingsWindow
+        self.exch_window = ExchangeSettingsWindow()
+        self.exch_window.show()
 
 
 
