@@ -1,15 +1,12 @@
-# main.py — точка входа для запуска gui
-import sys
-import os
-# os.environ["QT_QPA_PLATFORM"] = "wayland-egl"  # или "wayland-egl"
-os.environ["XDG_SESSION_TYPE"] = "x11"
-
+# main.py
+import sys, os
 from PyQt5.QtWidgets import QApplication
-from gui.app import create_main_window
-from config.settings import Settings
+from gui.main_screen import MainScreen
+
+os.environ["XDG_SESSION_TYPE"] = "x11"   # как у вас было
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = create_main_window()
-    window.mainloop()
+    main_screen = MainScreen()
+    main_screen.show()
     sys.exit(app.exec_())

@@ -10,7 +10,7 @@ from config.constants import BINANCE_TICKER_URL, CANDLE_SETTINGS
 logger = logging.getLogger(__name__)
 
 TIMEFRAMES = ["1d", "4h", "1h", "15m"]
-EXCLUDED_STABLES = {"USDC", "BUSD", "TUSD", "PAX", "USDP", "DAI", "FDUSD", "EUR", "UST", "USDD", "SUSD", "XUSD"}
+EXCLUDED_STABLES = {"USDC", "BUSD", "TUSD", "PAX", "USDP", "DAI", "FDUSD", "EUR", "UST", "USDD", "SUSD", "USD1", "XUSD"}
 
 
 class DataCollector:

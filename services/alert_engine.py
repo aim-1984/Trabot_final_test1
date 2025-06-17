@@ -3,7 +3,7 @@ from datetime import datetime
 
 from database.database import DatabaseManager
 
-EXCLUDED_STABLES = {"USDC", "BUSD", "TUSD", "PAX", "USDP", "DAI", "FDUSD", "EUR", "UST", "USDD", "SUSD", "XUSD"}
+EXCLUDED_STABLES = {"USDC", "BUSD", "TUSD", "PAX", "USDP", "DAI", "FDUSD", "EUR", "UST", "USDD", "SUSD", "USD1", "XUSD"}
 logger = logging.getLogger(__name__)
 
 

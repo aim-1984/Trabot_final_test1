@@ -129,3 +129,7 @@ def create_main_window():
     tf_combo.bind("<<ComboboxSelected>>", lambda e: update_chart())
 
     return root
+
+if __name__ == "__main__":
+    root = create_main_window()
+    root.mainloop()
