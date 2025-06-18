@@ -188,7 +188,7 @@ class DatabaseManager:
                 id SERIAL PRIMARY KEY,
                 symbol VARCHAR(20) NOT NULL,
                 timeframe VARCHAR(5) NOT NULL,
-                signal_type VARCHAR(10) NOT NULL,
+                signal_type VARCHAR(255) NOT NULL,
                 price DECIMAL(20,8) NOT NULL,
                 time BIGINT NOT NULL,
                 indicator VARCHAR(50),

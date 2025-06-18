@@ -1,7 +1,9 @@
 # main.py
 
 # main.py
-import sys, os
+
+import sys
+import os
 import subprocess
 import logging
 from PyQt5.QtWidgets import QApplication
@@ -9,28 +11,32 @@ from gui.main_screen import MainScreen
 
 os.environ["XDG_SESSION_TYPE"] = "x11"
 
-# Настройка логгирования
+# ───────────────────────────────
+# Логирование
 logger = logging.getLogger("main")
 logger.setLevel(logging.INFO)
 handler = logging.StreamHandler()
 handler.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s", "%H:%M:%S"))
 logger.addHandler(handler)
 
+# ───────────────────────────────
 def launch_realtime():
     try:
-        subprocess.Popen([sys.executable, "run_realtime.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen([sys.executable, "run_realtime.py"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         logger.info("🚀 Реальное время запущено в фоне")
     except Exception as e:
         logger.error(f"❌ Ошибка запуска realtime: {e}")
 
 def launch_full():
     try:
-        logger.info("📦 Запуск полного анализа...")
-        subprocess.run([sys.executable, "run_full.py"], check=True)
+        logger.info("📦 Запуск полного анализа (--mode all)...")
+        subprocess.run([sys.executable, "run_full.py", "--mode", "all"], check=True)
         logger.info("✅ Полный анализ завершён")
     except Exception as e:
         logger.error(f"❌ Ошибка запуска полного анализа: {e}")
 
+# ───────────────────────────────
 if __name__ == "__main__":
     launch_full()
     launch_realtime()
@@ -39,6 +45,7 @@ if __name__ == "__main__":
     main_screen = MainScreen()
     main_screen.show()
     sys.exit(app.exec_())
+
 
 
 
@@ -94,33 +101,37 @@ if __name__ == "__main__":
 
 # run_full.py
 
+# run_full.py
+
 import asyncio
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
-import os
-from services.worker           import SignalWorker
+import argparse
+
+from services.worker            import SignalWorker
 from services.identifier        import PairIdentifier
 from services.collector         import DataCollector
 from services.level_engine      import LevelAnalyzer
 from services.indicator_engine  import IndicatorEngine
 from services.trend_engine      import TrendAnalyzer
 from services.signal_engine     import SignalEngine
+from services.alert_engine      import AlertSystem
 from services.deep_an           import MarketCapTracker
 from database.database          import DatabaseManager
 
-
-
+# ──────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("run_full")
 
 # ──────────────────────────────────────────────────────────────
 def wait_for_candles(target=50, timeout=10):
     """Блокирует поток до появления достаточного числа свечей."""
     db = DatabaseManager()
     for _ in range(timeout):
-        if any(len(c) >= target for c in db.get_all_candles().values()):
+        all_candles = db.get_all_candles()
+        if any(len(c) >= target for c in all_candles.values()):
             logger.info("✅ Свечи успешно загружены")
             return True
         logger.info("⏳ Ожидание загрузки свечей...")
@@ -130,58 +141,73 @@ def wait_for_candles(target=50, timeout=10):
 
 # ──────────────────────────────────────────────────────────────
 async def update_market_data():
-    # ① сперва заполняем pairs_cache
+    """Обновление пар, свечей, капитализации"""
     await PairIdentifier().update_pairs_cache()
-
-    # ② затем уже параллельно всё остальное
     await asyncio.gather(
-        # DerivativesEngine().update_metrics_for_all(),   # требует pairs_cache
-        # SentimentEngine().update_for_all(),             #   —//—
-        DataCollector().update_all_timeframes(),        #   —//—
+        DataCollector().update_all_timeframes(),
         MarketCapTracker().fetch_total_market_cap(),
     )
 
-def analyze():
+def analyze_all():
+    """Анализ уровней, индикаторов, трендов"""
     LevelAnalyzer().analyze_levels()
     IndicatorEngine().compute_indicators()
     TrendAnalyzer().analyze_trends()
+    AlertSystem().check_alerts()
 
-def run_worker():
+def generate_signals():
+    SignalEngine().generate_signals()
+
+def evaluate_signals():
     return SignalWorker().process_all_pairs()
 
+def clean_old_signals(days=2):
+    """Удаляет сигналы старше N дней"""
+    db = DatabaseManager()
+    cutoff = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp() * 1000)
+    with db.get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM signals WHERE time < %s", (cutoff,))
+            conn.commit()
+    logger.info(f"🧹 Удалены сигналы старше {days} дней")
+
 # ──────────────────────────────────────────────────────────────
-async def main():
-    logger.info("🚀 Полный запуск: обновление + оценка сигналов")
-    DatabaseManager().clear_old_candles()
+async def main(mode):
+    logger.info(f"🚀 Запуск режима: {mode}")
+    db = DatabaseManager()
+    db.clear_old_candles()
+    clean_old_signals()
 
-    # Шаг 1. сетевые обновления
-    await update_market_data()
-
-    # Шаг 2. ждём появления свечей
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, wait_for_candles)
+    executor = ThreadPoolExecutor()
 
-    # Шаг 3. аналитика (CPU)
-    with ThreadPoolExecutor() as pool:
-        await loop.run_in_executor(pool, analyze)
+    if mode in ("all", "update"):
+        await update_market_data()
+        await loop.run_in_executor(executor, wait_for_candles)
 
-        # Шаг 4. генерация «сырых» сигналов (AlertSystem внутри)
-        SignalEngine().generate_signals()
+    if mode in ("all", "analyze"):
+        await loop.run_in_executor(executor, analyze_all)
 
-        # Шаг 5. «глубокая» оценка всех сигналов
-        signals = await loop.run_in_executor(pool, run_worker)
+    if mode in ("all", "signals"):
+        await loop.run_in_executor(executor, generate_signals)
+        signals = await loop.run_in_executor(executor, evaluate_signals)
 
-    if signals:
-        logger.info(f"✅ Обновлённая таблица сигналов: {len(signals)} записей")
-    else:
-        logger.info("⚠️ Нет подходящих сигналов после оценки")
-
-
+        if signals:
+            logger.info(f"✅ Обновлённая таблица сигналов: {len(signals)} записей")
+        else:
+            logger.info("⚠️ Нет подходящих сигналов после оценки")
 
 # ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     DatabaseManager.init_schema_once()
-    asyncio.run(main())
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", type=str, choices=["all", "update", "analyze", "signals"], default="all",
+                        help="Выбери режим: all | update | analyze | signals")
+    args = parser.parse_args()
+
+    asyncio.run(main(args.mode))
+
 
 
 
@@ -248,98 +274,6 @@ async def realtime_loop():
 
 if __name__ == "__main__":
     asyncio.run(realtime_loop())
-
-
-# run_tasks.py
-
-import asyncio
-import logging
-from concurrent.futures import ThreadPoolExecutor
-
-from services.identifier      import PairIdentifier
-from services.collector       import DataCollector
-from services.level_engine    import LevelAnalyzer
-from services.indicator_engine import IndicatorEngine
-from services.trend_engine    import TrendAnalyzer
-from services.alert_engine    import AlertSystem
-from services.deep_an         import MarketCapTracker
-from database.database        import DatabaseManager
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# ──────────────────────────────────────────────────────────────
-async def update_market_data():
-    # ① сперва заполняем pairs_cache
-    await PairIdentifier().update_pairs_cache()
-
-    # ② затем уже параллельно всё остальное
-    await asyncio.gather(
-        # DerivativesEngine().update_metrics_for_all(),   # требует pairs_cache
-        # SentimentEngine().update_for_all(),             #   —//—
-        DataCollector().update_all_timeframes(),        #   —//—
-        MarketCapTracker().fetch_total_market_cap(),
-    )
-
-def sync_tasks():
-    """CPU-bound анализ выполняем в пуле потоков."""
-    LevelAnalyzer().analyze_levels()
-    IndicatorEngine().compute_indicators()
-    TrendAnalyzer().analyze_trends()
-    AlertSystem().check_alerts()
-
-# ──────────────────────────────────────────────────────────────
-async def main():
-    logger.info("🚀 Обновление данных рынка (без сигналов)")
-    DatabaseManager().clear_old_candles()
-
-    # ① сетевые задачи
-    await update_market_data()
-
-    # ② синхронные / тяжёлые задачи
-    loop = asyncio.get_running_loop()
-    with ThreadPoolExecutor() as pool:
-        await loop.run_in_executor(pool, sync_tasks)
-
-    logger.info("✅ Все данные обновлены (без сигналов)")
-
-# ──────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    asyncio.run(main())
-
-
-
-# run_worker.py
-
-import logging
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
-from services.worker import SignalWorker
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-async def main():
-    logger.info("📊 Запуск пересчёта сигналов по текущим данным")
-    loop = asyncio.get_running_loop()
-
-    def run_signals():
-        worker = SignalWorker()
-        return worker.process_all_pairs()
-
-    with ThreadPoolExecutor() as pool:
-        results = await loop.run_in_executor(pool, run_signals)
-
-    if results:
-        logger.info(f"✅ Сигналы обновлены: {len(results)}")
-        for signal in results:
-            logger.info(f"🟢 {signal['symbol']} {signal['timeframe']} — {signal['signal_type']} @ {signal['current_price']:.4f}")
-    else:
-        logger.info("⚠️ Ни одного сигнала не прошло фильтрацию")
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
 
 
 # gui/_init_.py
@@ -2196,7 +2130,7 @@ class DatabaseManager:
                 id SERIAL PRIMARY KEY,
                 symbol VARCHAR(20) NOT NULL,
                 timeframe VARCHAR(5) NOT NULL,
-                signal_type VARCHAR(10) NOT NULL,
+                signal_type VARCHAR(255) NOT NULL,
                 price DECIMAL(20,8) NOT NULL,
                 time BIGINT NOT NULL,
                 indicator VARCHAR(50),
@@ -4975,13 +4909,15 @@ class TrendAnalyzer:
 
 import logging
 import time
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-EXCLUDED_STABLES = {"USDC", "BUSD", "TUSD", "PAX", "USDP", "DAI", "FDUSD", "EUR", "UST", "USDD", "SUSD", "USD1", "XUSD"}
 
 from database.database import DatabaseManager
 from services.signal_score import SignalScorer
 from services.fibo_engine import FiboEngine
 from services.signal_engine import SignalEngine
+
+EXCLUDED_STABLES = {"USDC", "BUSD", "TUSD", "PAX", "USDP", "DAI", "FDUSD", "EUR", "UST", "USDD", "SUSD", "USD1", "XUSD"}
 
 logger = logging.getLogger(__name__)
 
@@ -4993,155 +4929,142 @@ class SignalWorker:
         self.fibo = FiboEngine()
         self.signal_engine = SignalEngine()
 
-
-    # ---------- public -----------------------------------------------------
-
     def process_all_pairs(self):
         logger.info("⚙️ Обработка всех пар для генерации сигналов")
-        pairs = self.db.get_symbols_from_cache()
-
-        pairs = [s for s in pairs if not any(stable in s for stable in EXCLUDED_STABLES)]
+        pairs = [s for s in self.db.get_symbols_from_cache() if not any(stable in s for stable in EXCLUDED_STABLES)]
         timeframes = ["1d", "4h", "1h", "15m"]
         tasks = [(symbol, tf) for symbol in pairs for tf in timeframes]
-
-        results = []
 
         trend_cache = {t["symbol"]: t for t in self.db.get_all_trends()}
         levels_cache = self.db.get_levels()
         market_cap_data = self.db.get_market_cap()
 
+        results = []
+
         with ThreadPoolExecutor(max_workers=20) as executor:
             futures = {
                 executor.submit(
-                    self.analyze_pair,
-                    symbol,
-                    tf,
-                    trend_cache,
-                    levels_cache,
-                    market_cap_data,
+                    self.analyze_pair, symbol, tf, trend_cache, levels_cache, market_cap_data
                 ): (symbol, tf)
                 for symbol, tf in tasks
             }
-
             for future in as_completed(futures):
                 result = future.result()
                 if result:
-                    results.append(result)
+                    results.extend(result)
 
-        # результирующий плоский список
-        flat_results = [
-            item
-            for sub in results
-            if isinstance(sub, list)
-            for item in sub
-            if isinstance(item, dict)
-            and {"symbol", "timeframe", "signal_type"} <= item.keys()
-        ]
+        # ─── Агрегация сигналов ──────────────────────────────────────
+        grouped = defaultdict(list)
+        for sig in results:
+            key = (sig["symbol"], sig["timeframe"])
+            grouped[key].append(sig)
 
-        if flat_results:
-            self.db.save_signals(flat_results)
-            logger.info(f"✅ Сигналы сохранены в базу: {len(flat_results)}")
+        merged_signals = []
+        for (symbol, tf), group in grouped.items():
+            best = max(group, key=lambda s: s["score"])
+            combined = {
+                "symbol": symbol,
+                "timeframe": tf,
+                "signal_type": ", ".join(sorted(set(s["signal_type"] for s in group))),
+                "current_price": best["current_price"],
+                "score": best["score"],
+                "recommendation": best.get("recommendation", "—"),
+                "created_at": best.get("created_at"),
+                "rsi": best.get("rsi"),
+                "macd": best.get("macd"),
+                "stoch_k": best.get("stoch_k"),
+                "stoch_d": best.get("stoch_d"),
+                "atr": best.get("atr"),
+                "adx": best.get("adx"),
+                "oi": best.get("oi"),
+                "fund_rate": best.get("fund_rate"),
+                "supertrend": best.get("supertrend"),
+                "vwap": best.get("vwap"),
+                "poc": best.get("poc"),
+                "sentiment": best.get("sentiment"),
+                "details": self._merge_details(group),
+                "time": best.get("created_at", int(time.time())) * 1000
+            }
+            merged_signals.append(combined)
+
+        if merged_signals:
+            self.db.save_signals(merged_signals)
+            logger.info(f"✅ Сигналы сохранены в базу: {len(merged_signals)}")
         else:
             logger.info("📭 Нет сигналов для сохранения")
 
-        return flat_results
+        return merged_signals
 
-    # ---------- private ----------------------------------------------------
+    def _merge_details(self, group):
+        all_details = []
+        for s in group:
+            d = s.get("details")
+            if isinstance(d, (list, tuple, set)):
+                all_details.extend(d)
+            elif isinstance(d, str):
+                all_details.extend(d.split("\n"))
+        return list(dict.fromkeys(all_details))  # уникальные, порядок сохранён
 
-    def analyze_pair(
-        self,
-        symbol: str,
-        timeframe: str,
-        trend_cache: dict,
-        levels_cache: list,
-        market_cap_data: dict,
-    ):
+    def analyze_pair(self, symbol, timeframe, trend_cache, levels_cache, market_cap_data):
         start = time.time()
-
-        # ── индикаторы ────────────────────────────────────────────────────
         raw = self.db.get_indicators(symbol, timeframe)
 
         def _as_float(val):
-            """Вернёт float, если значение похоже на число; иначе None."""
-            if val in (None, ""):
-                return None
-            try:
-                return float(val)
-            except (ValueError, TypeError):
-                return None
+            if val in (None, ""): return None
+            try: return float(val)
+            except: return None
 
         indicators = {k.lower(): _as_float(v) for k, v in raw.items()}
+        candles = self.db.get_candles(symbol, timeframe)
+        if not candles or len(candles) < 30:
+            return None
 
-        try:
-            candles = self.db.get_candles(symbol, timeframe)
-            if not candles or len(candles) < 30:
-                return None
+        current_price = candles[-1]["close"]
+        trend_data = trend_cache.get(symbol, {})
+        levels = [lvl for lvl in levels_cache if lvl["symbol"] == symbol and lvl["timeframe"] == timeframe]
+        fibo = self.fibo.calculate_for_pair(symbol, timeframe)
 
-            current_price = candles[-1]["close"]
-            trend_data = trend_cache.get(symbol, {})
-            levels = [
-                lvl
-                for lvl in levels_cache
-                if lvl["symbol"] == symbol and lvl["timeframe"] == timeframe
-            ]
-            fibo = self.fibo.calculate_for_pair(symbol, timeframe)
+        base_payload = {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "price": current_price,
+            "current_price": current_price,
+            "rsi": indicators.get("rsi"),
+            "macd": indicators.get("macd_hist"),
+            "stoch_k": indicators.get("stoch_k"),
+            "stoch_d": indicators.get("stoch_d"),
+            "atr": indicators.get("atr"),
+            "adx": indicators.get("adx"),
+            "oi": indicators.get("oi"),
+            "fund_rate": indicators.get("fund_rate"),
+            "supertrend": indicators.get("supertrend"),
+            "vwap": indicators.get("vwap"),
+            "poc": indicators.get("vpvr_poc"),
+        }
 
-            results = []
-
-            # --- PATCH BEGIN -----------------------------------------------------------
-            # соберём общие для любого типа сигнала данные
-            base_payload = {
-                "SYMBOL": symbol,  # <= оставьте как нужно БД
-                "TIMEFRAME": timeframe,
-                "PRICE": current_price,
-                "CURRENT_PRICE": current_price,
-
-                # индикаторы –  в том регистре, как названы колонки signals
-                "RSI": indicators.get("rsi"),
-                "MACD": indicators.get("macd_hist"),
-                "STOCH_K": indicators.get("stoch_k"),
-                "STOCH_D": indicators.get("stoch_d"),
-                "ATR": indicators.get("atr"),
-                "ADX": indicators.get("adx"),
-                "OI": indicators.get("oi"),
-                "FUND_RATE": indicators.get("fund_rate"),
-                "SUPERTREND": indicators.get("supertrend"),
-                "VWAP": indicators.get("vwap"),
-                "POC": indicators.get("vpvr_poc"),
+        results = []
+        for signal_type in ("long", "short"):
+            signal = {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "signal_type": signal_type,
+                "price": current_price,
+                "current_price": current_price,
             }
-            for signal_type in ("long", "short"):
-                signal = {
-                    "symbol": symbol,
-                    "timeframe": timeframe,
-                    "signal_type": signal_type,
-                    "price": current_price,
-                    "current_price": current_price,
-                }
+            result = self.scorer.evaluate(
+                trend_data, levels, indicators,
+                fibo["fibo_levels"] if fibo else {},
+                market_cap_data, signal,
+            )
+            if result and result["score"] >= 30:
+                if isinstance(result["details"], (list, set, tuple)):
+                    result["details"] = "\n".join(result["details"])
+                result |= base_payload | {"signal_type": signal_type}
+                results.append(result)
 
-                result = self.scorer.evaluate(
-                    trend_data,
-                    levels,
-                    indicators,
-                    fibo["fibo_levels"] if fibo else {},
-                    market_cap_data,
-                    signal,
-                )
+        logger.debug(f"⏱ {symbol} {timeframe} анализ за {time.time() - start:.2f} сек")
+        return results if results else None
 
-                if result and result["score"] >= 30:
-                    # 👉 приводим details к строке с переводами строк
-                    if isinstance(result["details"], (list, set, tuple)):
-                        result["details"] = "\n".join(result["details"])
-
-                    # мёрджим payload → гарантируем, что в БД уйдут все колонки
-                    result |= base_payload | {"SIGNAL_TYPE": signal_type}
-
-                    results.append(result)
-
-            return results if results else None
-
-        finally:
-            duration = time.time() - start
-            logger.debug(f"⏱ {symbol} {timeframe} анализ за {duration:.2f} сек")
 
 
 
